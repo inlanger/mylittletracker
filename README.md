@@ -1,0 +1,143 @@
+# mylittletracker
+
+A small, modern CLI to track parcels from multiple carriers (Correos, DHL, …). It uses httpx for HTTP calls and a unified Pydantic v2 model to normalize responses across providers.
+
+## Features
+- src/ layout, PEP 621 metadata in `pyproject.toml`
+- Console script: `mylittletracker`
+- Providers
+  - Correos (public API)
+  - DHL (Unified Shipment Tracking API)
+  - DPD (public PLC JSON endpoint)
+- Unified Pydantic v2 model (TrackingResponse → Shipment → TrackingEvent)
+- httpx for robust HTTP requests
+- Integration tests with pytest markers (skip when creds aren’t provided)
+
+## Installation
+
+Use a virtualenv and install in editable mode.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip3 install -U pip
+pip3 install -e .
+```
+
+## Usage
+
+List supported providers:
+
+```bash
+mylittletracker providers
+```
+
+Track a Correos shipment (no key required):
+
+```bash
+mylittletracker track correos PK43BG0440928440146007C --language EN
+```
+
+Track a DHL shipment (requires API key):
+
+Track a DPD shipment (public PLC JSON endpoint):
+
+```bash
+# Defaults to an English locale (en_US)
+mylittletracker track dpd 05162815323093 --json
+
+# You can also control locale via --language
+mylittletracker track dpd 05162815323093 --language en_US --json
+mylittletracker track dpd 05162815323093 --language NL --json   # maps to nl_NL
+```
+
+Notes:
+- No auth required for DPD PLC endpoint.
+- The language argument accepts either a two-letter code (mapped to a default locale: EN→en_US, NL→nl_NL, DE→de_DE, …) or a full locale (e.g., en_US) and affects localised labels from DPD.
+
+```bash
+# Make sure DHL_API_KEY is configured (see Environment below)
+mylittletracker track dhl 7777777770 --language en
+```
+
+Add `--json` to print normalized JSON from the unified model:
+
+```bash
+mylittletracker track correos PK43BG0440928440146007C --json
+```
+
+## Environment
+
+Only DHL requires credentials. Put them in a `.env` file (already gitignored):
+
+```
+DHL_API_KEY=PasteHere_ConsumerKey
+# Optional (defaults to prod):
+# DHL_SERVER=prod    # or "test" for https://api-test.dhl.com
+```
+
+Notes:
+- Do not commit secrets. `.env` is ignored by git.
+- Correos does not require a key.
+- DPD does not require a key.
+
+## Unified model (Pydantic v2)
+
+The CLI normalizes each provider response into a common shape:
+
+- TrackingResponse
+  - provider: str (e.g. "correos", "dhl")
+  - query_timestamp: datetime
+  - shipments: list[Shipment]
+- Shipment
+  - tracking_number: str
+  - carrier: str
+  - status: enum (information_received, in_transit, out_for_delivery, delivered, exception, returned, cancelled, unknown)
+  - events: list[TrackingEvent]
+  - optional: service_type, origin, destination, estimated_delivery, actual_delivery
+- TrackingEvent
+  - timestamp: datetime (parsed from provider formats; serialized as ISO 8601 in --json)
+  - status: str
+  - optional: location, details, status_code
+
+## Testing
+
+We use pytest for both unit and integration tests. Integration tests call live carrier APIs and are designed to skip automatically if credentials aren’t configured.
+
+Install pytest:
+
+```bash
+.venv/bin/pip3 install pytest
+```
+
+Run all tests:
+
+```bash
+.venv/bin/python3 -m pytest -q
+```
+
+Only integration tests:
+
+```bash
+.venv/bin/python3 -m pytest -m integration -q
+```
+
+Skip integration tests:
+
+```bash
+.venv/bin/python3 -m pytest -m "not integration" -q
+```
+
+DHL integration test requires DHL_API_KEY. If missing, the test is skipped with a clear message. Non-auth errors (e.g., 404 for unknown tracking) are treated as a skip; 401/403 fails the test to signal bad credentials.
+
+## Adding a new provider
+
+1. Create a new module under `src/mylittletracker/providers/`.
+2. Implement a `track(code: str, ...) -> TrackingResponse` function.
+3. Fetch the provider JSON with httpx and write a normalizer to build the unified model.
+4. Register the provider in `src/mylittletracker/cli.py` (PROVIDERS mapping).
+5. Add integration tests under `tests/` and mark with `@pytest.mark.integration`.
+
+## License
+
+MIT
