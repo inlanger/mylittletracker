@@ -66,6 +66,35 @@ Add `--json` to print normalized JSON from the unified model:
 mylittletracker track correos PK43BG0440928440146007C --json
 ```
 
+## Library usage (async)
+
+Use the async provider functions in your own code (bots/services). Reuse a single AsyncClient for multiple calls to reduce latency.
+
+```python
+import asyncio
+import httpx
+from mylittletracker.providers import correos, dhl, dpd
+
+async def main():
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        # Correos (no key)
+        c = await correos.track_async("PK43BG0440928440146007C", language="EN", client=client)
+        # DPD (no key)
+        d = await dpd.track_async("05162815323093", language="en_US", client=client)
+        # DHL (requires DHL_API_KEY in env)
+        h = await dhl.track_async("CH515858672DE", language="en", client=client)
+
+        print(c.model_dump_json(indent=2))
+        print(d.model_dump_json(indent=2))
+        print(h.model_dump_json(indent=2))
+
+asyncio.run(main())
+```
+
+Notes:
+- Each provider also exposes a synchronous `track()` wrapper used by the CLI, but libraries/services should prefer the async API.
+- Timestamps are parsed into `datetime` objects; use `.model_dump_json()` or `.model_dump()` to serialize.
+
 ## Environment
 
 Only DHL requires credentials. Put them in a `.env` file (already gitignored):
