@@ -355,10 +355,14 @@ async def track_async(
 
 
 def _resolve_locale(lang_code: str) -> str:
-    # If already a full locale like en_US, return as-is
-    if "_" in lang_code:
-        return lang_code
-    lc = lang_code.lower()
+    # Normalize to language_REGION (e.g., en_US)
+    code = lang_code.strip()
+    if "_" in code:
+        parts = code.split("_", 1)
+        lang = parts[0].lower()
+        region = parts[1].upper()
+        return f"{lang}_{region}"
+    lc = code.lower()
     mapping = {
         "en": "en_US",
         "nl": "nl_NL",
