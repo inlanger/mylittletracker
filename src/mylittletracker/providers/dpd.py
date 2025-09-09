@@ -304,6 +304,56 @@ def _find_first_events_list(obj: Dict[str, Any]) -> list[Dict[str, Any]]:
     return []
 
 
+async def track_async(
+    parcel_number: str,
+    *,
+    language: str = "EN",
+    lang: Optional[str] = None,
+    client: Optional[httpx.AsyncClient] = None,
+) -> TrackingResponse:
+    """Async version of DPD tracking (PLC JSON first, fallback to HTML)."""
+    lang_code = (lang or language or "EN").lower()
+    headers = {
+        "User-Agent": "mylittletracker/0.1 (+https://example.com)",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    rest_base = "https://tracking.dpd.de/rest/plc"
+    locale = _resolve_locale(lang_code)
+
+    async def _request_plc(ac: httpx.AsyncClient) -> Optional[TrackingResponse]:
+        try:
+            resp = await ac.get(
+                f"{rest_base}/{locale}/{parcel_number}",
+                headers={"User-Agent": headers["User-Agent"], "Accept": "application/json"},
+                timeout=20.0,
+            )
+            ctype = resp.headers.get("Content-Type", "")
+            if resp.status_code == 200 and "application/json" in ctype.lower():
+                data = resp.json()
+                try:
+                    shipment = _normalize_dpd_plc_json(data, parcel_number)
+                except Exception:
+                    shipment = _normalize_dpd_embedded(data, parcel_number)
+                return TrackingResponse(shipments=[shipment], provider="dpd")
+        except Exception:
+            return None
+        return None
+
+    if client is None:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as ac:
+            plc = await _request_plc(ac)
+            if plc is not None:
+                return plc
+            # Fallback to HTML scrape path
+            return track(parcel_number, language=language, lang=lang)
+    else:
+        plc = await _request_plc(client)
+        if plc is not None:
+            return plc
+        # Fallback to sync HTML scrape as the last resort
+        return track(parcel_number, language=language, lang=lang)
+
+
 def _resolve_locale(lang_code: str) -> str:
     # If already a full locale like en_US, return as-is
     if "_" in lang_code:

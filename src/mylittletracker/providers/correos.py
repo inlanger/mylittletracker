@@ -1,6 +1,6 @@
 import httpx
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from ..models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
 
@@ -23,6 +23,30 @@ def track(shipment_code: str, language: str = "EN") -> TrackingResponse:
         response.raise_for_status()
         raw_data = response.json()
         
+    return normalize_correos_response(raw_data, shipment_code)
+
+
+async def track_async(
+    shipment_code: str,
+    language: str = "EN",
+    *,
+    client: Optional[httpx.AsyncClient] = None,
+) -> TrackingResponse:
+    """Async version of Correos tracking."""
+    params = {"text": shipment_code, "language": language}
+    headers = {
+        "User-Agent": "mylittletracker/0.1 (+https://example.com)",
+        "Accept": "application/json",
+    }
+    if client is None:
+        async with httpx.AsyncClient(timeout=20.0) as ac:
+            resp = await ac.get(BASE_URL, params=params, headers=headers)
+            resp.raise_for_status()
+            raw_data = resp.json()
+    else:
+        resp = await client.get(BASE_URL, params=params, headers=headers)
+        resp.raise_for_status()
+        raw_data = resp.json()
     return normalize_correos_response(raw_data, shipment_code)
 
 

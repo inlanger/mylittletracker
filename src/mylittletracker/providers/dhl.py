@@ -67,6 +67,63 @@ def track(
     return normalize_dhl_response(raw_data, tracking_number)
 
 
+async def track_async(
+    tracking_number: str,
+    *,
+    language: str = "en",
+    service: Optional[str] = None,
+    requester_country_code: Optional[str] = None,
+    origin_country_code: Optional[str] = None,
+    recipient_postal_code: Optional[str] = None,
+    offset: Optional[int] = None,
+    limit: Optional[int] = None,
+    server: Optional[str] = None,
+    client: Optional[httpx.AsyncClient] = None,
+) -> TrackingResponse:
+    """Async version of DHL tracking."""
+    api_key = os.getenv("DHL_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "DHL_API_KEY is not set. Add it to your environment or .env file."
+        )
+
+    server = server or os.getenv("DHL_SERVER", "prod")
+    params: Dict[str, Any] = {
+        "trackingNumber": tracking_number,
+        "language": language,
+    }
+    if service:
+        params["service"] = service
+    if requester_country_code:
+        params["requesterCountryCode"] = requester_country_code
+    if origin_country_code:
+        params["originCountryCode"] = origin_country_code
+    if recipient_postal_code:
+        params["recipientPostalCode"] = recipient_postal_code
+    if offset is not None:
+        params["offset"] = offset
+    if limit is not None:
+        params["limit"] = limit
+
+    headers = {
+        "User-Agent": "mylittletracker/0.1 (+https://example.com)",
+        "Accept": "application/json",
+        "DHL-API-Key": api_key,
+    }
+
+    if client is None:
+        async with httpx.AsyncClient(timeout=20.0) as ac:
+            response = await ac.get(_base_url(server), params=params, headers=headers)
+            response.raise_for_status()
+            raw_data = response.json()
+    else:
+        response = await client.get(_base_url(server), params=params, headers=headers)
+        response.raise_for_status()
+        raw_data = response.json()
+
+    return normalize_dhl_response(raw_data, tracking_number)
+
+
 def normalize_dhl_response(raw_data: Dict[str, Any], tracking_number: str) -> TrackingResponse:
     """Normalize DHL API response to universal TrackingResponse model."""
     shipments = []
