@@ -21,8 +21,11 @@ def cmd_track(args: argparse.Namespace) -> int:
     tracker = PROVIDERS[args.carrier]
     tracking_response = tracker(args.code, language=args.language)
     if args.json:
-        # Convert Pydantic model to JSON
-        print(tracking_response.model_dump_json(indent=2))
+        # Convert Pydantic model to JSON (compat across Pydantic v1/v2)
+        try:
+            print(tracking_response.model_dump_json(indent=2))  # Pydantic v2
+        except AttributeError:
+            print(tracking_response.json(indent=2))  # Pydantic v1
     else:
         print_human(tracking_response)
     return 0

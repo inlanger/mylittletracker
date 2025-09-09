@@ -7,7 +7,7 @@ These models provide a common interface for tracking data from different provide
 from datetime import datetime
 from enum import Enum
 from typing import List, Optional
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_serializer
 
 
 class ShipmentStatus(str, Enum):
@@ -30,10 +30,13 @@ class TrackingEvent(BaseModel):
     location: Optional[str] = Field(None, description="Location where event occurred")
     details: Optional[str] = Field(None, description="Additional details about the event")
     status_code: Optional[str] = Field(None, description="Provider-specific status code")
-    
-    model_config = ConfigDict(
-        json_encoders={datetime: lambda v: v.isoformat()}
-    )
+
+    @field_serializer("timestamp")
+    def _ser_timestamp(self, dt: datetime) -> str:
+        from .utils import serialize_dt
+        return serialize_dt(dt)
+
+    model_config = ConfigDict()
 
 
 class Shipment(BaseModel):
@@ -50,10 +53,22 @@ class Shipment(BaseModel):
     destination: Optional[str] = Field(None, description="Destination location")
     estimated_delivery: Optional[datetime] = Field(None, description="Estimated delivery date")
     actual_delivery: Optional[datetime] = Field(None, description="Actual delivery date")
-    
-    model_config = ConfigDict(
-        json_encoders={datetime: lambda v: v.isoformat()}
-    )
+
+    @field_serializer("estimated_delivery")
+    def _ser_estimated(self, dt: Optional[datetime]) -> Optional[str]:
+        if dt is None:
+            return None
+        from .utils import serialize_dt
+        return serialize_dt(dt)
+
+    @field_serializer("actual_delivery")
+    def _ser_actual(self, dt: Optional[datetime]) -> Optional[str]:
+        if dt is None:
+            return None
+        from .utils import serialize_dt
+        return serialize_dt(dt)
+
+    model_config = ConfigDict()
 
 
 class TrackingResponse(BaseModel):
@@ -62,6 +77,11 @@ class TrackingResponse(BaseModel):
     shipments: List[Shipment] = Field(description="List of tracked shipments")
     provider: str = Field(description="Name of the tracking provider")
     query_timestamp: datetime = Field(default_factory=datetime.now, description="When the tracking was performed")
+
+    @field_serializer("query_timestamp")
+    def _ser_query_ts(self, dt: datetime) -> str:
+        from .utils import serialize_dt
+        return serialize_dt(dt)
     
     @property
     def has_shipments(self) -> bool:
@@ -73,6 +93,4 @@ class TrackingResponse(BaseModel):
         """Get the first (primary) shipment if available."""
         return self.shipments[0] if self.shipments else None
     
-    model_config = ConfigDict(
-        json_encoders={datetime: lambda v: v.isoformat()}
-    )
+    model_config = ConfigDict()
