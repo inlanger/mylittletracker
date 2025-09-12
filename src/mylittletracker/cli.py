@@ -3,7 +3,7 @@ import json
 from typing import Callable, Optional
 
 from dotenv import load_dotenv
-from .providers import correos, dhl
+from .providers import correos, dhl, gls
 from .models import TrackingResponse
 
 # Load environment variables from .env if present
@@ -14,6 +14,7 @@ PROVIDERS: dict[str, Callable[..., TrackingResponse]] = {
     "correos": correos.track,
     "dhl": dhl.track,
     "dpd": __import__("mylittletracker.providers.dpd", fromlist=["track"]).track,
+    "gls": gls.track,
 }
 
 
