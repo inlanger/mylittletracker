@@ -16,6 +16,7 @@ class ShipmentStatus(str, Enum):
     INFORMATION_RECEIVED = "information_received"
     IN_TRANSIT = "in_transit"
     OUT_FOR_DELIVERY = "out_for_delivery"
+    AVAILABLE_FOR_PICKUP = "available_for_pickup"
     DELIVERED = "delivered"
     EXCEPTION = "exception"
     RETURNED = "returned"

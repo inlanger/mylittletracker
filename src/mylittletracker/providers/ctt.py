@@ -184,11 +184,11 @@ def _infer_ctt_status(events: List[TrackingEvent]) -> ShipmentStatus:
     # First try explicit mapping by code if present in latest event
     code = (latest.status_code or "").strip()
     code_map = {
-        # Observed codes from sample: 0000, 1000, 1500
-        # Note: 1500 may be OUT_FOR_DELIVERY ("Entrega hoy" / "En reparto")
+        # Observed codes from sample: 0000, 1000, 1500; plus 2310 observed as available for pickup
         "0000": ShipmentStatus.INFORMATION_RECEIVED,
         "1000": ShipmentStatus.IN_TRANSIT,
         "1500": ShipmentStatus.OUT_FOR_DELIVERY,
+        "2310": ShipmentStatus.AVAILABLE_FOR_PICKUP,
     }
     if code in code_map:
         return code_map[code]
@@ -204,6 +204,8 @@ def _infer_ctt_status(events: List[TrackingEvent]) -> ShipmentStatus:
         return ShipmentStatus.DELIVERED
     if "entrega hoy" in t or "en reparto" in t or "reparto" in t or "delivery today" in t:
         return ShipmentStatus.OUT_FOR_DELIVERY
+    if "disponible para recoger" in t or "para recoger" in t or "punto de recogida" in t:
+        return ShipmentStatus.AVAILABLE_FOR_PICKUP
     if "transito" in t or "en transito" in t or "in transit" in t:
         return ShipmentStatus.IN_TRANSIT
     if "pendiente de recepcion" in t or "pendiente de recogida" in t or "admitido" in t:

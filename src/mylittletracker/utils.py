@@ -26,6 +26,16 @@ def map_status_from_text(text: Optional[str]) -> ShipmentStatus:
     if not text:
         return ShipmentStatus.UNKNOWN
     t = text.lower()
+    # Available for pickup should be checked before generic "pickup"
+    if (
+        "available for pickup" in t
+        or "ready for pickup" in t
+        or "disponible para recoger" in t
+        or "para recoger" in t
+        or "pickup point" in t
+        or "collection point" in t
+    ):
+        return ShipmentStatus.AVAILABLE_FOR_PICKUP
     if "delivered" in t or "entregado" in t:
         return ShipmentStatus.DELIVERED
     if "out for delivery" in t or "in delivery" in t or "reparto" in t:

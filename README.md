@@ -129,7 +129,7 @@ The CLI normalizes each provider response into a common shape:
 - Shipment
   - tracking_number: str
   - carrier: str
-  - status: enum (information_received, in_transit, out_for_delivery, delivered, exception, returned, cancelled, unknown)
+  - status: enum (information_received, in_transit, out_for_delivery, available_for_pickup, delivered, exception, returned, cancelled, unknown)
   - events: list[TrackingEvent]
   - optional: service_type, origin, destination, estimated_delivery, actual_delivery
 - TrackingEvent
