@@ -49,16 +49,77 @@ def _fallback_response(carrier: str, code: str, exc: Exception) -> TrackingRespo
     status_code: Optional[str] = None
     status_text = "Error during tracking"
     details = f"{exc.__class__.__name__}: {exc}"
+    ev_extras: dict[str, object] = {}
 
     if isinstance(exc, httpx.HTTPStatusError):
-        status_code = str(exc.response.status_code)
-        status_text = f"HTTP {exc.response.status_code} while fetching"
+        resp = exc.response
+        status_code = str(resp.status_code)
+        status_text = f"HTTP {resp.status_code} while fetching"
+
+        url_text: Optional[str] = None
         try:
-            details = f"URL: {exc.request.url}"
+            url_text = str(exc.request.url)
+        except Exception:
+            url_text = None
+
+        # Attempt to extract provider error code/description from response body
+        provider_error_code: Optional[str] = None
+        provider_error_desc: Optional[str] = None
+        body_snippet: Optional[str] = None
+        try:
+            ctype = (resp.headers.get("Content-Type") or resp.headers.get("content-type") or "").lower()
+            if "json" in ctype:
+                body = resp.json()
+                # Try common fields
+                provider_error_code = str(
+                    (body.get("code")
+                     or body.get("error_code")
+                     or body.get("error")
+                     or "")
+                ).strip() or None
+                provider_error_desc = (
+                    body.get("message")
+                    or body.get("error_description")
+                    or body.get("description")
+                    or body.get("detail")
+                    or None
+                )
+                if not provider_error_desc:
+                    try:
+                        body_snippet = json.dumps(body)[:500]
+                    except Exception:
+                        body_snippet = str(body)[:500]
+            else:
+                txt = resp.text or ""
+                body_snippet = txt[:500] if txt else None
         except Exception:
             pass
+
+        parts: list[str] = []
+        if url_text:
+            parts.append(f"URL: {url_text}")
+        if provider_error_code:
+            parts.append(f"Provider error code: {provider_error_code}")
+        if provider_error_desc:
+            parts.append(f"Provider error: {provider_error_desc}")
+        if body_snippet and not provider_error_desc:
+            parts.append(f"Body: {body_snippet}")
+        if parts:
+            details = " | ".join(parts)
+
+        ev_extras = {
+            "url": url_text,
+            "provider_error_code": provider_error_code,
+            "provider_error_description": provider_error_desc,
+        }
+        if body_snippet:
+            ev_extras["body_snippet"] = body_snippet
     elif isinstance(exc, httpx.HTTPError):
         status_text = "HTTP error during tracking"
+        try:
+            ev_extras["url"] = str(exc.request.url)
+        except Exception:
+            pass
 
     shipment = Shipment(
         tracking_number=code,
@@ -70,6 +131,7 @@ def _fallback_response(carrier: str, code: str, exc: Exception) -> TrackingRespo
                 status=status_text,
                 details=details,
                 status_code=status_code,
+                extras=ev_extras or None,
             )
         ],
     )
