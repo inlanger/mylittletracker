@@ -23,10 +23,16 @@ PROVIDERS: dict[str, Callable[..., TrackingResponse]] = {
 
 def cmd_track(args: argparse.Namespace) -> int:
     tracker = PROVIDERS[args.carrier]
-    try:
+    error_occurred = False
+    if args.strict:
+        # In strict mode, propagate errors
         tracking_response = tracker(args.code, language=args.language)
-    except Exception as exc:  # Fallback to normalized UNKNOWN response on errors
-        tracking_response = _fallback_response(args.carrier, args.code, exc)
+    else:
+        try:
+            tracking_response = tracker(args.code, language=args.language)
+        except Exception as exc:  # Fallback to normalized UNKNOWN response on errors
+            tracking_response = _fallback_response(args.carrier, args.code, exc)
+            error_occurred = True
     if args.json:
         # Convert Pydantic model to JSON (compat across Pydantic v1/v2)
         try:
@@ -35,7 +41,7 @@ def cmd_track(args: argparse.Namespace) -> int:
             print(tracking_response.json(indent=2))  # Pydantic v1
     else:
         print_human(tracking_response)
-    return 0
+    return 1 if (not args.strict and error_occurred) else 0
 
 
 def cmd_providers(_args: argparse.Namespace) -> int:
@@ -184,6 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_track.add_argument("code", help="Parcel/shipment code")
     p_track.add_argument("--language", "-l", default="EN", help="Language (provider-specific)")
     p_track.add_argument("--json", action="store_true", help="Output raw JSON payload")
+    p_track.add_argument("--strict", action="store_true", help="Propagate errors (non-zero exit) instead of returning fallback")
     p_track.set_defaults(func=cmd_track)
 
     p_prov = subparsers.add_parser("providers", help="List supported carriers")

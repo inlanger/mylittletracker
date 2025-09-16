@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 import unicodedata
 
 from ..models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
+from ..utils import parse_dt_iso, get_with_retries, async_get_with_retries
 
 BASE_URL = "https://wct.cttexpress.com/p_track_redis.php"
 
@@ -20,10 +21,8 @@ def track(sc: str, *, language: Optional[str] = None) -> TrackingResponse:
     }
     params = {"sc": sc}
 
-    with httpx.Client(timeout=20.0) as client:
-        resp = client.get(BASE_URL, params=params, headers=headers)
-        resp.raise_for_status()
-        raw = resp.json()
+    resp = get_with_retries(BASE_URL, params=params, headers=headers, timeout=20.0)
+    raw = resp.json()
 
     return normalize_ctt_response(raw, sc)
 
@@ -41,15 +40,10 @@ async def track_async(
     }
     params = {"sc": sc}
 
-    if client is None:
-        async with httpx.AsyncClient(timeout=20.0) as ac:
-            resp = await ac.get(BASE_URL, params=params, headers=headers)
-            resp.raise_for_status()
-            raw = resp.json()
-    else:
-        resp = await client.get(BASE_URL, params=params, headers=headers)
-        resp.raise_for_status()
-        raw = resp.json()
+    resp = await async_get_with_retries(
+        BASE_URL, params=params, headers=headers, timeout=20.0, client=client
+    )
+    raw = resp.json()
 
     return normalize_ctt_response(raw, sc)
 
@@ -69,7 +63,7 @@ def normalize_ctt_response(raw: Dict[str, Any], tracking_number: str) -> Trackin
     for ev in raw_events:
         # Prefer precise event datetime, fallback to event_date
         dt_str = ((ev.get("detail") or {}).get("item_event_datetime")) or ev.get("event_date")
-        ts = _parse_dt(dt_str) or datetime.now()
+        ts = parse_dt_iso(dt_str) or datetime.now()
 
         desc = ev.get("description") or ev.get("type") or ""
         status_code = ev.get("code")
@@ -108,11 +102,11 @@ def normalize_ctt_response(raw: Dict[str, Any], tracking_number: str) -> Trackin
 
     # Estimated vs actual delivery
     est_str = data.get("committed_delivery_datetime") or data.get("reported_delivery_date") or data.get("delivery_date")
-    estimated_delivery = _parse_date(est_str) if est_str else None
+    estimated_delivery = parse_dt_iso(est_str) if est_str else None
     actual_delivery = None
     if status == ShipmentStatus.DELIVERED:
         ad_str = data.get("delivery_date") or est_str
-        actual_delivery = _parse_date(ad_str) if ad_str else None
+        actual_delivery = parse_dt_iso(ad_str) if ad_str else None
 
     tracking = data.get("shipping_code") or tracking_number
 
@@ -146,6 +140,8 @@ def normalize_ctt_response(raw: Dict[str, Any], tracking_number: str) -> Trackin
 
 
 def _parse_dt(s: Optional[str]) -> Optional[datetime]:
+    # Deprecated in favor of utils.parse_dt_iso
+    return parse_dt_iso(s)
     if not s:
         return None
     try:
@@ -160,6 +156,8 @@ def _parse_dt(s: Optional[str]) -> Optional[datetime]:
 
 
 def _parse_date(s: Optional[str]) -> Optional[datetime]:
+    # Deprecated in favor of utils.parse_dt_iso
+    return parse_dt_iso(s)
     if not s:
         return None
     # Date-only becomes midnight

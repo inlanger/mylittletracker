@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from ..models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
+from ..utils import parse_dt_iso, get_with_retries, async_get_with_retries
 
 TEST_BASE = "https://api-test.dhl.com/track/shipments"
 PROD_BASE = "https://api-eu.dhl.com/track/shipments"
@@ -59,11 +60,9 @@ def track(
         "DHL-API-Key": api_key,
     }
 
-    with httpx.Client(timeout=20.0) as client:
-        response = client.get(_base_url(server), params=params, headers=headers)
-        response.raise_for_status()
-        raw_data = response.json()
-        
+    response = get_with_retries(_base_url(server), params=params, headers=headers, timeout=20.0)
+    raw_data = response.json()
+    
     return normalize_dhl_response(raw_data, tracking_number)
 
 
@@ -111,15 +110,10 @@ async def track_async(
         "DHL-API-Key": api_key,
     }
 
-    if client is None:
-        async with httpx.AsyncClient(timeout=20.0) as ac:
-            response = await ac.get(_base_url(server), params=params, headers=headers)
-            response.raise_for_status()
-            raw_data = response.json()
-    else:
-        response = await client.get(_base_url(server), params=params, headers=headers)
-        response.raise_for_status()
-        raw_data = response.json()
+    response = await async_get_with_retries(
+        _base_url(server), params=params, headers=headers, timeout=20.0, client=client
+    )
+    raw_data = response.json()
 
     return normalize_dhl_response(raw_data, tracking_number)
 
@@ -143,7 +137,7 @@ def normalize_dhl_response(raw_data: Dict[str, Any], tracking_number: str) -> Tr
     # Convert events
     for event in dhl_shipment.get("events", []):
         # Parse timestamp
-        timestamp = _parse_dhl_timestamp(event.get("timestamp", ""))
+        timestamp = parse_dt_iso(event.get("timestamp", "")) or datetime.now()
         
         # Get status description
         status = (event.get("status") or 
@@ -199,21 +193,8 @@ def normalize_dhl_response(raw_data: Dict[str, Any], tracking_number: str) -> Tr
 
 
 def _parse_dhl_timestamp(timestamp_str: str) -> datetime:
-    """Parse DHL timestamp string into datetime object preserving timezone when present."""
-    try:
-        if timestamp_str:
-            # Normalize Z to +00:00 and let fromisoformat parse offsets
-            ts = timestamp_str.replace("Z", "+00:00")
-            return datetime.fromisoformat(ts)
-        return datetime.now()
-    except ValueError:
-        # Fallbacks for non-standard inputs
-        for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S"):
-            try:
-                return datetime.strptime(timestamp_str, fmt)
-            except Exception:
-                continue
-        return datetime.now()
+    # Deprecated in favor of utils.parse_dt_iso
+    return parse_dt_iso(timestamp_str) or datetime.now()
 
 
 def _infer_dhl_status(dhl_shipment: Dict[str, Any], events: list[TrackingEvent]) -> ShipmentStatus:

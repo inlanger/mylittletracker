@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 
 from ..models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
+from ..utils import get_with_retries, async_get_with_retries
 
 BASE_URL = "https://api1.correos.es/digital-services/searchengines/api/v1/envios"
 
@@ -18,11 +19,9 @@ def track(shipment_code: str, language: str = "EN") -> TrackingResponse:
         "Accept": "application/json",
     }
     
-    with httpx.Client(timeout=20.0) as client:
-        response = client.get(BASE_URL, params=params, headers=headers)
-        response.raise_for_status()
-        raw_data = response.json()
-        
+    response = get_with_retries(BASE_URL, params=params, headers=headers, timeout=20.0)
+    raw_data = response.json()
+    
     return normalize_correos_response(raw_data, shipment_code)
 
 
@@ -39,14 +38,10 @@ async def track_async(
         "Accept": "application/json",
     }
     if client is None:
-        async with httpx.AsyncClient(timeout=20.0) as ac:
-            resp = await ac.get(BASE_URL, params=params, headers=headers)
-            resp.raise_for_status()
-            raw_data = resp.json()
+        resp = await async_get_with_retries(BASE_URL, params=params, headers=headers, timeout=20.0)
     else:
-        resp = await client.get(BASE_URL, params=params, headers=headers)
-        resp.raise_for_status()
-        raw_data = resp.json()
+        resp = await async_get_with_retries(BASE_URL, params=params, headers=headers, timeout=20.0, client=client)
+    raw_data = resp.json()
     return normalize_correos_response(raw_data, shipment_code)
 
 

@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from ..models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
+from ..utils import parse_dt_iso, get_with_retries, async_get_with_retries
 
 # Base URLs from the provided GLS OpenAPI spec
 SERVERS = {
@@ -84,10 +85,8 @@ def track(
         "showEvents": str(show_events).lower(),
     }
 
-    with httpx.Client(timeout=20.0) as client:
-        resp = client.get(url, headers=headers, params=params)
-        resp.raise_for_status()
-        raw = resp.json()
+    resp = get_with_retries(url, headers=headers, params=params, timeout=20.0)
+    raw = resp.json()
 
     return normalize_gls_parcels_response(raw)
 
@@ -127,14 +126,11 @@ async def track_async(
     }
 
     if client is None:
-        async with httpx.AsyncClient(timeout=20.0) as ac:
-            resp = await ac.get(url, headers=headers, params=params)
-            resp.raise_for_status()
-            raw = resp.json()
+        # Reuse async helper without persistent client
+        resp = await async_get_with_retries(url, headers=headers, params=params, timeout=20.0)
     else:
-        resp = await client.get(url, headers=headers, params=params)
-        resp.raise_for_status()
-        raw = resp.json()
+        resp = await async_get_with_retries(url, headers=headers, params=params, timeout=20.0, client=client)
+    raw = resp.json()
 
     return normalize_gls_parcels_response(raw)
 
@@ -175,7 +171,7 @@ def normalize_gls_parcels_response(raw: Dict[str, Any]) -> TrackingResponse:
         # Build events
         events: List[TrackingEvent] = []
         for ev in p.get("events", []) or []:
-            ts = _parse_gls_datetime(ev.get("eventDateTime")) or datetime.now()
+            ts = parse_dt_iso(ev.get("eventDateTime")) or datetime.now()
             desc = ev.get("description") or ev.get("code") or ""
             loc = _compose_location(ev.get("city"), ev.get("postalCode"), ev.get("country"))
             events.append(
@@ -220,23 +216,8 @@ def _compose_location(city: Optional[str], postal: Optional[str], country: Optio
 
 
 def _parse_gls_datetime(s: Optional[str]) -> Optional[datetime]:
-    if not s:
-        return None
-    # Examples: 2024-10-11T15:24:57+0200 ; 2025-02-10T15:13:46+0100
-    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S"):
-        try:
-            return datetime.strptime(s, fmt)
-        except Exception:
-            continue
-    # Try to insert colon in timezone if missing
-    try:
-        if len(s) >= 5 and (s[-5] in ["+", "-"] and s[-3] != ":"):
-            s2 = s[:-2] + ":" + s[-2:]
-            from datetime import datetime as _dt
-            return _dt.fromisoformat(s2)
-    except Exception:
-        pass
-    return None
+    # Deprecated in favor of utils.parse_dt_iso
+    return parse_dt_iso(s)
 
 
 def _map_gls_status(s: str) -> ShipmentStatus:
