@@ -137,5 +137,5 @@ def _infer_correos_status(events: list[TrackingEvent]) -> ShipmentStatus:
     elif "admitido" in latest_status or "received" in latest_status:
         return ShipmentStatus.INFORMATION_RECEIVED
     else:
-        return ShipmentStatus.IN_TRANSIT  # Default assumption
+        return ShipmentStatus.UNKNOWN  # Default fallback for unmapped statuses
 
