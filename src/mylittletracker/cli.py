@@ -1,11 +1,12 @@
 import argparse
 import json
 from typing import Callable, Optional
+from datetime import datetime
 
+import httpx
 from dotenv import load_dotenv
-from .providers import correos, dhl, gls
-from .providers import ctt
-from .models import TrackingResponse
+from .providers import correos, dhl, gls, ctt
+from .models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
 
 # Load environment variables from .env if present
 load_dotenv()
@@ -22,7 +23,10 @@ PROVIDERS: dict[str, Callable[..., TrackingResponse]] = {
 
 def cmd_track(args: argparse.Namespace) -> int:
     tracker = PROVIDERS[args.carrier]
-    tracking_response = tracker(args.code, language=args.language)
+    try:
+        tracking_response = tracker(args.code, language=args.language)
+    except Exception as exc:  # Fallback to normalized UNKNOWN response on errors
+        tracking_response = _fallback_response(args.carrier, args.code, exc)
     if args.json:
         # Convert Pydantic model to JSON (compat across Pydantic v1/v2)
         try:
@@ -38,6 +42,38 @@ def cmd_providers(_args: argparse.Namespace) -> int:
     for name in sorted(PROVIDERS):
         print(name)
     return 0
+
+
+def _fallback_response(carrier: str, code: str, exc: Exception) -> TrackingResponse:
+    # Build a minimal normalized response with an explanatory event
+    status_code: Optional[str] = None
+    status_text = "Error during tracking"
+    details = f"{exc.__class__.__name__}: {exc}"
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = str(exc.response.status_code)
+        status_text = f"HTTP {exc.response.status_code} while fetching"
+        try:
+            details = f"URL: {exc.request.url}"
+        except Exception:
+            pass
+    elif isinstance(exc, httpx.HTTPError):
+        status_text = "HTTP error during tracking"
+
+    shipment = Shipment(
+        tracking_number=code,
+        carrier=carrier,
+        status=ShipmentStatus.UNKNOWN,
+        events=[
+            TrackingEvent(
+                timestamp=datetime.now(),
+                status=status_text,
+                details=details,
+                status_code=status_code,
+            )
+        ],
+    )
+    return TrackingResponse(shipments=[shipment], provider=carrier)
 
 
 def print_human(tracking_response: TrackingResponse) -> None:
