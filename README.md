@@ -1,6 +1,6 @@
 # mylittletracker
 
-A small, modern CLI to track parcels from multiple carriers (Correos, DHL, …). It uses httpx for HTTP calls and a unified Pydantic v2 model to normalize responses across providers.
+A small, modern CLI to track parcels from multiple carriers (Correos, DHL, CTT Express, DPD, GLS). It uses httpx for HTTP calls and a unified Pydantic v2 model to normalize responses across providers.
 
 ## Features
 - src/ layout, PEP 621 metadata in `pyproject.toml`
@@ -172,7 +172,7 @@ DHL integration test requires DHL_API_KEY. If missing, the test is skipped with 
 1. Create a new module under `src/mylittletracker/providers/`.
 2. Implement a `track(code: str, ...) -> TrackingResponse` function.
 3. Fetch the provider JSON with httpx and write a normalizer to build the unified model.
-4. Register the provider in `src/mylittletracker/cli.py` (PROVIDERS mapping).
+4. Register the provider in `src/mylittletracker/providers/__init__.py` (REGISTRY mapping).
 5. Add integration tests under `tests/` and mark with `@pytest.mark.integration`.
 
 ## License

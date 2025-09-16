@@ -5,20 +5,14 @@ from datetime import datetime
 
 import httpx
 from dotenv import load_dotenv
-from .providers import correos, dhl, gls, ctt
 from .models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
+from .providers import REGISTRY as PROVIDER_REGISTRY, get_provider_names
 
 # Load environment variables from .env if present
 load_dotenv()
 
 # Map carrier name to its tracking function
-PROVIDERS: dict[str, Callable[..., TrackingResponse]] = {
-    "correos": correos.track,
-    "ctt": ctt.track,
-    "dhl": dhl.track,
-    "dpd": __import__("mylittletracker.providers.dpd", fromlist=["track"]).track,
-    "gls": gls.track,
-}
+PROVIDERS: dict[str, Callable[..., TrackingResponse]] = PROVIDER_REGISTRY
 
 
 def cmd_track(args: argparse.Namespace) -> int:
@@ -154,7 +148,18 @@ def print_human(tracking_response: TrackingResponse) -> None:
     for shipment in tracking_response.shipments:
         print(f"\nShipment: {shipment.tracking_number}")
         print(f"Carrier: {shipment.carrier}")
-        print(f"Status: {shipment.status.value}")
+        # Status line; if unknown, show latest raw status/code for clarity
+        status_line = f"Status: {shipment.status.value}"
+        if shipment.status.name == "UNKNOWN" and shipment.events:
+            latest = shipment.events[-1]
+            extra_bits = []
+            if latest.status:
+                extra_bits.append(latest.status)
+            if latest.status_code:
+                extra_bits.append(f"code={latest.status_code}")
+            if extra_bits:
+                status_line += f" (latest: {'; '.join(extra_bits)})"
+        print(status_line)
         
         # Show additional info if available
         if shipment.service_type:
@@ -186,7 +191,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     p_track = subparsers.add_parser("track", help="Track a parcel")
-    p_track.add_argument("carrier", choices=sorted(PROVIDERS.keys()), help="Carrier name")
+    p_track.add_argument("carrier", choices=get_provider_names(), help="Carrier name")
     p_track.add_argument("code", help="Parcel/shipment code")
     p_track.add_argument("--language", "-l", default="EN", help="Language (provider-specific)")
     p_track.add_argument("--json", action="store_true", help="Output raw JSON payload")

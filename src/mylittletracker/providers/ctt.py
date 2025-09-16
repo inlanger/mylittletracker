@@ -187,6 +187,9 @@ def _infer_ctt_status(events: List[TrackingEvent]) -> ShipmentStatus:
         "1000": ShipmentStatus.IN_TRANSIT,
         "1500": ShipmentStatus.OUT_FOR_DELIVERY,
         "2310": ShipmentStatus.AVAILABLE_FOR_PICKUP,
+        # Future observations (documented placeholders):
+        # "2000": ShipmentStatus.DELIVERED,
+        # "2400": ShipmentStatus.EXCEPTION,
     }
     if code in code_map:
         return code_map[code]
