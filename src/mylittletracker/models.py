@@ -6,7 +6,7 @@ These models provide a common interface for tracking data from different provide
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, ConfigDict, field_serializer
 
 
@@ -30,6 +30,10 @@ class TrackingEvent(BaseModel):
     location: Optional[str] = Field(None, description="Location where event occurred")
     details: Optional[str] = Field(None, description="Additional details about the event")
     status_code: Optional[str] = Field(None, description="Provider-specific status code")
+    extras: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Provider-specific extra metadata for this event",
+    )
 
     @field_serializer("timestamp")
     def _ser_timestamp(self, dt: datetime) -> str:
@@ -53,6 +57,10 @@ class Shipment(BaseModel):
     destination: Optional[str] = Field(None, description="Destination location")
     estimated_delivery: Optional[datetime] = Field(None, description="Estimated delivery date")
     actual_delivery: Optional[datetime] = Field(None, description="Actual delivery date")
+    extras: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Provider-specific extra metadata for this shipment",
+    )
 
     @field_serializer("estimated_delivery")
     def _ser_estimated(self, dt: Optional[datetime]) -> Optional[str]:

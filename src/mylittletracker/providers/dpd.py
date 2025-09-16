@@ -219,6 +219,9 @@ def _normalize_dpd_plc_json(obj: Dict[str, Any], parcel_number: str) -> Shipment
                 )
             )
 
+    # Sort events by timestamp for consistency
+    events.sort(key=lambda e: e.timestamp)
+
     # Determine shipment status using current status or latest event
     status_enum = ShipmentStatus.UNKNOWN
     current = next((s for s in status_info if s.get("isCurrentStatus")), None)

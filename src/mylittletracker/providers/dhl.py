@@ -159,6 +159,9 @@ def normalize_dhl_response(raw_data: Dict[str, Any], tracking_number: str) -> Tr
         )
         events.append(tracking_event)
     
+    # Sort events for consistency
+    events.sort(key=lambda e: e.timestamp)
+
     # Determine overall shipment status
     status = _infer_dhl_status(dhl_shipment, events)
     
@@ -196,19 +199,20 @@ def normalize_dhl_response(raw_data: Dict[str, Any], tracking_number: str) -> Tr
 
 
 def _parse_dhl_timestamp(timestamp_str: str) -> datetime:
-    """Parse DHL timestamp string into datetime object."""
+    """Parse DHL timestamp string into datetime object preserving timezone when present."""
     try:
-        # DHL uses ISO format like "2023-12-01T10:30:00"
         if timestamp_str:
-            # Handle timezone info if present
-            if "+" in timestamp_str or timestamp_str.endswith("Z"):
-                # Remove timezone for simple parsing
-                timestamp_str = timestamp_str.split("+")[0].rstrip("Z")
-            return datetime.fromisoformat(timestamp_str)
-        else:
-            return datetime.now()
+            # Normalize Z to +00:00 and let fromisoformat parse offsets
+            ts = timestamp_str.replace("Z", "+00:00")
+            return datetime.fromisoformat(ts)
+        return datetime.now()
     except ValueError:
-        # Fallback if parsing fails
+        # Fallbacks for non-standard inputs
+        for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.strptime(timestamp_str, fmt)
+            except Exception:
+                continue
         return datetime.now()
 
 

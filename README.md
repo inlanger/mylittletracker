@@ -9,6 +9,7 @@ A small, modern CLI to track parcels from multiple carriers (Correos, DHL, …).
   - Correos (public API)
   - DHL (Unified Shipment Tracking API)
   - DPD (public PLC JSON endpoint)
+  - CTT Express (public JSON endpoint)
 - Unified Pydantic v2 model (TrackingResponse → Shipment → TrackingEvent)
 - httpx for robust HTTP requests
 - Integration tests with pytest markers (skip when creds aren’t provided)
@@ -60,6 +61,12 @@ Notes:
 mylittletracker track dhl 7777777770 --language en
 ```
 
+Track a CTT Express shipment (no key required):
+
+```bash
+mylittletracker track ctt 0082800082909720118884 --json
+```
+
 Add `--json` to print normalized JSON from the unified model:
 
 ```bash
@@ -109,6 +116,7 @@ Notes:
 - Do not commit secrets. `.env` is ignored by git.
 - Correos does not require a key.
 - DPD does not require a key.
+- CTT Express does not require a key.
 
 ## Unified model (Pydantic v2)
 

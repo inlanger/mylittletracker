@@ -83,6 +83,9 @@ def normalize_correos_response(raw_data: Dict[str, Any], tracking_number: str) -
         )
         events.append(tracking_event)
     
+    # Sort events chronologically for consistency
+    events.sort(key=lambda e: e.timestamp)
+
     # Determine overall shipment status from latest event
     status = _infer_correos_status(events)
     

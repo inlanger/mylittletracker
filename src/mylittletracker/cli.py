@@ -4,6 +4,7 @@ from typing import Callable, Optional
 
 from dotenv import load_dotenv
 from .providers import correos, dhl, gls
+from .providers import ctt
 from .models import TrackingResponse
 
 # Load environment variables from .env if present
@@ -12,6 +13,7 @@ load_dotenv()
 # Map carrier name to its tracking function
 PROVIDERS: dict[str, Callable[..., TrackingResponse]] = {
     "correos": correos.track,
+    "ctt": ctt.track,
     "dhl": dhl.track,
     "dpd": __import__("mylittletracker.providers.dpd", fromlist=["track"]).track,
     "gls": gls.track,

@@ -42,7 +42,11 @@ def test_gls_parser_200_without_errors():
     assert s.tracking_number == "36301917596"
     assert s.status == ShipmentStatus.INFORMATION_RECEIVED  # PREADVICE maps to information_received
     assert len(s.events) == 2
-    assert s.events[0].status.startswith("The parcel was provided")
+    # Events are sorted chronologically; ensure both expected statuses are present
+    assert any(e.status.startswith("The parcel was provided") for e in s.events)
+    assert any(e.status.startswith("The parcel data was entered") for e in s.events)
+    # And ordering is ascending by timestamp
+    assert s.events[0].timestamp <= s.events[1].timestamp
 
 
 def test_gls_parser_200_with_links_deliveredps():

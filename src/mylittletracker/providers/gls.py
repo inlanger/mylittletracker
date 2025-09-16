@@ -188,6 +188,9 @@ def normalize_gls_parcels_response(raw: Dict[str, Any]) -> TrackingResponse:
                 )
             )
 
+        # Sort events for consistency
+        events.sort(key=lambda e: e.timestamp)
+
         shipment = Shipment(
             tracking_number=unitno,
             carrier="gls",
