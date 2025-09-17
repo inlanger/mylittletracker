@@ -16,6 +16,7 @@ from . import dhl as _dhl
 from . import dpd as _dpd
 from . import gls as _gls
 from . import ctt as _ctt
+from . import ecoscooting as _ecoscooting
 
 REGISTRY: dict[str, Callable[..., TrackingResponse]] = {
     "correos": _correos.track,
@@ -23,6 +24,7 @@ REGISTRY: dict[str, Callable[..., TrackingResponse]] = {
     "dhl": _dhl.track,
     "dpd": _dpd.track,
     "gls": _gls.track,
+    "ecoscooting": _ecoscooting.track,
 }
 
 

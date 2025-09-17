@@ -4,13 +4,15 @@ from typing import Callable, Optional
 from datetime import datetime
 
 import httpx
-from dotenv import load_dotenv
+import os
+from dotenv import load_dotenv, find_dotenv
 from .models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
 from .providers import REGISTRY as PROVIDER_REGISTRY, get_provider_names
 from .utils import normalize_language
 
-# Load environment variables from .env if present
-load_dotenv()
+# Load environment variables from .env if present (prefer project .env or MLT_DOTENV_PATH)
+_dotenv_path = os.getenv("MLT_DOTENV_PATH") or find_dotenv(usecwd=True)
+load_dotenv(_dotenv_path or None)
 
 # Map carrier name to its tracking function
 PROVIDERS: dict[str, Callable[..., TrackingResponse]] = PROVIDER_REGISTRY
