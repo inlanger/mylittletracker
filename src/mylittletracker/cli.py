@@ -202,9 +202,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_track.add_argument(
         "--language",
         "-l",
-        default="en",
+        default=None,
         help=(
             "Language (two-letter code like en, es, de, fr, it, nl). "
+            "If omitted, defaults to $MLT_DEFAULT_LANGUAGE or system locale (fallback en). "
             "Other forms (e.g., en-US) are accepted and normalized per provider."
         ),
     )

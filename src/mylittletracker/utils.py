@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional, Iterable
 import time
 import asyncio
+import os
 
 import httpx
 
@@ -171,8 +172,31 @@ def normalize_language(language: Optional[str], provider: Optional[str]) -> tupl
     # Canonical two-letter languages we support
     allowed = {"en", "es", "de", "fr", "it", "nl"}
 
+    # Determine default language (two-letter) from env or system locale
+    def _detect_default_lang() -> str:
+        env_candidates = [
+            os.getenv("MLT_DEFAULT_LANGUAGE"),
+            os.getenv("MYLITTLETRACKER_DEFAULT_LANGUAGE"),
+            os.getenv("LANG"),
+            os.getenv("LC_ALL"),
+        ]
+        for val in env_candidates:
+            if not val:
+                continue
+            v = val.strip()
+            if not v:
+                continue
+            v2 = v.replace("-", "_")
+            # Try patterns like es, es_ES, es_ES.UTF-8
+            lang2 = v2.split("_", 1)[0].split(".", 1)[0].lower()
+            if lang2 in allowed:
+                return lang2
+        return "en"  # final fallback
+
+    default_two_letter = _detect_default_lang()
+
     # Default
-    lang = (language or "en").strip()
+    lang = (language or default_two_letter).strip()
     prov = (provider or "").lower()
 
     # Helper: split on hyphen/underscore and keep first two chars for lang
@@ -199,23 +223,23 @@ def normalize_language(language: Optional[str], provider: Optional[str]) -> tupl
             if candidate in mapping.values():
                 normalized = candidate
         if not normalized:
-            normalized = mapping.get(l) if l in allowed else mapping["en"]
+            normalized = mapping.get(l) if l in allowed else mapping[default_two_letter]
         return (normalized, lang if normalized.lower() != lang.lower() else None)
 
     # GLS wants two-letter upper-case Accept-Language
     if prov == "gls":
         l, _ = split_lang(lang)
-        normalized = (l if l in allowed else "en").upper()
+        normalized = (l if l in allowed else default_two_letter).upper()
         return (normalized, lang if normalized != lang else None)
 
     # DHL UTAPI uses two-letter lower-case (default en)
     if prov == "dhl":
         l, _ = split_lang(lang)
-        normalized = (l if l in allowed else "en").lower()
+        normalized = (l if l in allowed else default_two_letter).lower()
         return (normalized, lang if normalized != lang else None)
 
     # Correos/CTT and others: safer to use two-letter upper-case (they accept that)
     l, _ = split_lang(lang)
-    normalized = (l if l in allowed else "en").upper()
+    normalized = (l if l in allowed else default_two_letter).upper()
     return (normalized, lang if normalized != lang else None)
 
