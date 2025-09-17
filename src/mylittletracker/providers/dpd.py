@@ -1,6 +1,6 @@
 import re
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import httpx
 from bs4 import BeautifulSoup
@@ -12,6 +12,24 @@ BASE_PAGE = (
     "https://www.dpdgroup.com/nl/mydpd/my-parcels/incoming"
 )
 
+# Supported PLC locales and simple mapping from language -> locale
+_SUPPORTED_LOCALES = {
+    "en_US",
+    "nl_NL",
+    "de_DE",
+    "fr_FR",
+    "it_IT",
+    "es_ES",
+}
+_LANG_TO_LOCALE = {
+    "en": "en_US",
+    "nl": "nl_NL",
+    "de": "de_DE",
+    "fr": "fr_FR",
+    "it": "it_IT",
+    "es": "es_ES",
+}
+
 
 def track(parcel_number: str, *, language: str = "EN", lang: Optional[str] = None) -> TrackingResponse:
     """Attempt to retrieve DPD tracking by scraping the public page.
@@ -21,8 +39,9 @@ def track(parcel_number: str, *, language: str = "EN", lang: Optional[str] = Non
     TrackingResponse and advise using an official API instead.
     """
     # prefer 'language' but allow legacy 'lang'
-    lang_code = (lang or language or "EN").lower()
-    url = f"{BASE_PAGE}?parcelNumber={parcel_number}&lang={lang_code}"
+    lang_code_raw = (lang or language or "EN")
+    lang_code = lang_code_raw.strip()
+    url = f"{BASE_PAGE}?parcelNumber={parcel_number}&lang={lang_code.lower()}"
     headers = {
         "User-Agent": "mylittletracker/0.1 (+https://example.com)",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -32,7 +51,7 @@ def track(parcel_number: str, *, language: str = "EN", lang: Optional[str] = Non
         # 1) Try calling the JSON REST endpoint as the SPA would
         rest_base = "https://tracking.dpd.de/rest/plc"
         # Resolve locale for PLC endpoint (e.g., en_US, nl_NL, de_DE)
-        locale = _resolve_locale(lang_code)
+        locale, normalized_from = _resolve_locale(lang_code)
         try:
             json_headers = {
                 "User-Agent": headers["User-Agent"],
@@ -45,7 +64,9 @@ def track(parcel_number: str, *, language: str = "EN", lang: Optional[str] = Non
                 data = rest_resp.json()
                 # Normalize JSON payload (PLC structure)
                 try:
-                    shipment = _normalize_dpd_plc_json(data, parcel_number)
+                    shipment = _normalize_dpd_plc_json(
+                        data, parcel_number, locale=locale, language_input=lang_code, normalized_from=normalized_from
+                    )
                     return TrackingResponse(shipments=[shipment], provider="dpd")
                 except Exception:
                     # Fallback to generic embedded normalizer
@@ -173,7 +194,14 @@ def _looks_like_dpd_payload(obj: Dict[str, Any]) -> bool:
     return any(h in text for h in hints)
 
 
-def _normalize_dpd_plc_json(obj: Dict[str, Any], parcel_number: str) -> Shipment:
+def _normalize_dpd_plc_json(
+    obj: Dict[str, Any],
+    parcel_number: str,
+    *,
+    locale: Optional[str] = None,
+    language_input: Optional[str] = None,
+    normalized_from: Optional[str] = None,
+) -> Shipment:
     """Normalize JSON from /rest/plc/{locale}/{parcelLabelNumber} to our model."""
     plc = (
         obj.get("parcellifecycleResponse", {})
@@ -246,11 +274,23 @@ def _normalize_dpd_plc_json(obj: Dict[str, Any], parcel_number: str) -> Shipment
 
     tracking_number = shipment_info.get("parcelLabelNumber") or parcel_number
 
+    extras: Dict[str, Any] = {}
+    if locale:
+        extras["dpd_locale"] = locale
+    # Record normalization if the input language was not directly a supported locale
+    if normalized_from and normalized_from != "":
+        # Only set if normalization actually happened
+        if isinstance(language_input, str):
+            canon = language_input.strip()
+            if canon.lower() != locale.lower():
+                extras["language_normalized_from"] = canon
+
     return Shipment(
         tracking_number=tracking_number,
         carrier="dpd",
         status=status_enum,
         events=events,
+        extras=extras or None,
     )
 
 
@@ -315,13 +355,14 @@ async def track_async(
     client: Optional[httpx.AsyncClient] = None,
 ) -> TrackingResponse:
     """Async version of DPD tracking (PLC JSON first, fallback to HTML)."""
-    lang_code = (lang or language or "EN").lower()
+    lang_code_raw = (lang or language or "EN")
+    lang_code = lang_code_raw.strip()
     headers = {
         "User-Agent": "mylittletracker/0.1 (+https://example.com)",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
     rest_base = "https://tracking.dpd.de/rest/plc"
-    locale = _resolve_locale(lang_code)
+    locale, normalized_from = _resolve_locale(lang_code)
 
     async def _request_plc(ac: httpx.AsyncClient) -> Optional[TrackingResponse]:
         try:
@@ -334,7 +375,9 @@ async def track_async(
             if resp.status_code == 200 and "application/json" in ctype.lower():
                 data = resp.json()
                 try:
-                    shipment = _normalize_dpd_plc_json(data, parcel_number)
+                    shipment = _normalize_dpd_plc_json(
+                        data, parcel_number, locale=locale, language_input=lang_code, normalized_from=normalized_from
+                    )
                 except Exception:
                     shipment = _normalize_dpd_embedded(data, parcel_number)
                 return TrackingResponse(shipments=[shipment], provider="dpd")
@@ -357,24 +400,36 @@ async def track_async(
         return track(parcel_number, language=language, lang=lang)
 
 
-def _resolve_locale(lang_code: str) -> str:
-    # Normalize to language_REGION (e.g., en_US)
+def _resolve_locale(lang_code: str) -> Tuple[str, Optional[str]]:
+    """Resolve an input language or locale to a supported PLC locale.
+
+    Returns (locale, normalized_from). normalized_from is the original input if a
+    normalization or fallback was applied; otherwise None.
+    """
+    if not lang_code:
+        return ("en_US", None)
+
     code = lang_code.strip()
-    if "_" in code:
-        parts = code.split("_", 1)
-        lang = parts[0].lower()
-        region = parts[1].upper()
-        return f"{lang}_{region}"
-    lc = code.lower()
-    mapping = {
-        "en": "en_US",
-        "nl": "nl_NL",
-        "de": "de_DE",
-        "fr": "fr_FR",
-        "it": "it_IT",
-        "es": "es_ES",
-    }
-    return mapping.get(lc, f"{lc}_{lc.upper()}")
+    # Accept hyphen or underscore, canonicalize to lang_REGION
+    c = code.replace("-", "_")
+    if len(c) == 5 and c[2] == "_":
+        lang = c[:2].lower()
+        region = c[3:].upper()
+        loc = f"{lang}_{region}"
+        if loc in _SUPPORTED_LOCALES:
+            return (loc, None)
+        # Fallback to mapping by language only
+        if lang in _LANG_TO_LOCALE:
+            return (_LANG_TO_LOCALE[lang], code)
+        return ("en_US", code)
+
+    # Two-letter language code
+    lc = c.lower()
+    if lc in _LANG_TO_LOCALE:
+        return (_LANG_TO_LOCALE[lc], None)
+
+    # Unknown -> fallback to en_US
+    return ("en_US", code)
 
 
 def _parse_iso_date(s: Optional[str]) -> Optional[datetime]:

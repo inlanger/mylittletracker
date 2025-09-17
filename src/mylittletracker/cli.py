@@ -7,6 +7,7 @@ import httpx
 from dotenv import load_dotenv
 from .models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
 from .providers import REGISTRY as PROVIDER_REGISTRY, get_provider_names
+from .utils import normalize_language
 
 # Load environment variables from .env if present
 load_dotenv()
@@ -17,16 +18,21 @@ PROVIDERS: dict[str, Callable[..., TrackingResponse]] = PROVIDER_REGISTRY
 
 def cmd_track(args: argparse.Namespace) -> int:
     tracker = PROVIDERS[args.carrier]
+    # Normalize language globally per provider
+    lang_norm, lang_from = normalize_language(args.language, args.carrier)
     error_occurred = False
     if args.strict:
         # In strict mode, propagate errors
-        tracking_response = tracker(args.code, language=args.language)
+        tracking_response = tracker(args.code, language=lang_norm)
     else:
         try:
-            tracking_response = tracker(args.code, language=args.language)
+            tracking_response = tracker(args.code, language=lang_norm)
         except Exception as exc:  # Fallback to normalized UNKNOWN response on errors
             tracking_response = _fallback_response(args.carrier, args.code, exc)
             error_occurred = True
+    # If language normalization happened and not JSON output, emit a small note when verbose
+    if args.verbose and (not args.json) and lang_from and (lang_from != lang_norm):
+        print(f"Note: normalized language '{lang_from}' -> '{lang_norm}' for {args.carrier}")
     if args.json:
         # Convert Pydantic model to JSON (compat across Pydantic v1/v2)
         try:
@@ -193,9 +199,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_track = subparsers.add_parser("track", help="Track a parcel")
     p_track.add_argument("carrier", choices=get_provider_names(), help="Carrier name")
     p_track.add_argument("code", help="Parcel/shipment code")
-    p_track.add_argument("--language", "-l", default="EN", help="Language (provider-specific)")
+    p_track.add_argument(
+        "--language",
+        "-l",
+        default="en",
+        help=(
+            "Language (two-letter code like en, es, de, fr, it, nl). "
+            "Other forms (e.g., en-US) are accepted and normalized per provider."
+        ),
+    )
     p_track.add_argument("--json", action="store_true", help="Output raw JSON payload")
     p_track.add_argument("--strict", action="store_true", help="Propagate errors (non-zero exit) instead of returning fallback")
+    p_track.add_argument("--verbose", "-v", action="store_true", help="Print normalization notes and extra info")
     p_track.set_defaults(func=cmd_track)
 
     p_prov = subparsers.add_parser("providers", help="List supported carriers")

@@ -161,3 +161,61 @@ def map_status_from_text(text: Optional[str]) -> ShipmentStatus:
         return ShipmentStatus.EXCEPTION
     return ShipmentStatus.UNKNOWN
 
+
+def normalize_language(language: Optional[str], provider: Optional[str]) -> tuple[str, Optional[str]]:
+    """Globally normalize language parameter per provider expectations.
+
+    Returns a tuple (normalized_value, normalized_from). If normalization was not
+    needed, normalized_from is None.
+    """
+    # Canonical two-letter languages we support
+    allowed = {"en", "es", "de", "fr", "it", "nl"}
+
+    # Default
+    lang = (language or "en").strip()
+    prov = (provider or "").lower()
+
+    # Helper: split on hyphen/underscore and keep first two chars for lang
+    def split_lang(s: str) -> tuple[str, Optional[str]]:
+        s2 = s.replace("-", "_")
+        if "_" in s2 and len(s2) >= 5:
+            return s2[:2].lower(), s2[3:5].upper()
+        return s2[:2].lower(), None
+
+    # DPD expects a PLC locale like en_US
+    if prov == "dpd":
+        l, r = split_lang(lang)
+        mapping = {
+            "en": "en_US",
+            "nl": "nl_NL",
+            "de": "de_DE",
+            "fr": "fr_FR",
+            "it": "it_IT",
+            "es": "es_ES",
+        }
+        normalized = None
+        if r:
+            candidate = f"{l}_{r}"
+            if candidate in mapping.values():
+                normalized = candidate
+        if not normalized:
+            normalized = mapping.get(l) if l in allowed else mapping["en"]
+        return (normalized, lang if normalized.lower() != lang.lower() else None)
+
+    # GLS wants two-letter upper-case Accept-Language
+    if prov == "gls":
+        l, _ = split_lang(lang)
+        normalized = (l if l in allowed else "en").upper()
+        return (normalized, lang if normalized != lang else None)
+
+    # DHL UTAPI uses two-letter lower-case (default en)
+    if prov == "dhl":
+        l, _ = split_lang(lang)
+        normalized = (l if l in allowed else "en").lower()
+        return (normalized, lang if normalized != lang else None)
+
+    # Correos/CTT and others: safer to use two-letter upper-case (they accept that)
+    l, _ = split_lang(lang)
+    normalized = (l if l in allowed else "en").upper()
+    return (normalized, lang if normalized != lang else None)
+
