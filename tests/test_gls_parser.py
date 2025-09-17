@@ -1,5 +1,3 @@
-import pytest
-
 from mylittletracker.providers.gls import normalize_gls_parcels_response
 from mylittletracker.models import ShipmentStatus
 
@@ -40,7 +38,9 @@ def test_gls_parser_200_without_errors():
     assert len(res.shipments) == 1
     s = res.shipments[0]
     assert s.tracking_number == "36301917596"
-    assert s.status == ShipmentStatus.INFORMATION_RECEIVED  # PREADVICE maps to information_received
+    assert (
+        s.status == ShipmentStatus.INFORMATION_RECEIVED
+    )  # PREADVICE maps to information_received
     assert len(s.events) == 2
     # Events are sorted chronologically; ensure both expected statuses are present
     assert any(e.status.startswith("The parcel was provided") for e in s.events)
@@ -133,4 +133,3 @@ def test_gls_parser_200_reference_two_parcels_intransit():
     res = normalize_gls_parcels_response(raw)
     assert len(res.shipments) == 2
     assert all(s.status == ShipmentStatus.IN_TRANSIT for s in res.shipments)
-

@@ -154,9 +154,21 @@ def map_status_from_text(text: Optional[str]) -> ShipmentStatus:
         return ShipmentStatus.DELIVERED
     if "out for delivery" in t or "in delivery" in t or "reparto" in t:
         return ShipmentStatus.OUT_FOR_DELIVERY
-    if "in transit" in t or "transit" in t or "depot" in t or "sorted" in t or "on the way" in t:
+    if (
+        "in transit" in t
+        or "transit" in t
+        or "depot" in t
+        or "sorted" in t
+        or "on the way" in t
+    ):
         return ShipmentStatus.IN_TRANSIT
-    if "pickup" in t or "accepted" in t or "admitido" in t or "pre-registered" in t or "pre registered" in t:
+    if (
+        "pickup" in t
+        or "accepted" in t
+        or "admitido" in t
+        or "pre-registered" in t
+        or "pre registered" in t
+    ):
         return ShipmentStatus.INFORMATION_RECEIVED
     if "exception" in t or "failed" in t or "undeliverable" in t:
         return ShipmentStatus.EXCEPTION
@@ -242,4 +254,3 @@ def normalize_language(language: Optional[str], provider: Optional[str]) -> tupl
     l, _ = split_lang(lang)
     normalized = (l if l in allowed else default_two_letter).upper()
     return (normalized, lang if normalized != lang else None)
-

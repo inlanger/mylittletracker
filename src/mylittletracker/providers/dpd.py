@@ -1,4 +1,3 @@
-import re
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
@@ -8,9 +7,7 @@ from bs4 import BeautifulSoup
 from ..models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
 
 
-BASE_PAGE = (
-    "https://www.dpdgroup.com/nl/mydpd/my-parcels/incoming"
-)
+BASE_PAGE = "https://www.dpdgroup.com/nl/mydpd/my-parcels/incoming"
 
 # Supported PLC locales and simple mapping from language -> locale
 _SUPPORTED_LOCALES = {
@@ -31,7 +28,9 @@ _LANG_TO_LOCALE = {
 }
 
 
-def track(parcel_number: str, *, language: str = "EN", lang: Optional[str] = None) -> TrackingResponse:
+def track(
+    parcel_number: str, *, language: str = "EN", lang: Optional[str] = None
+) -> TrackingResponse:
     """Attempt to retrieve DPD tracking by scraping the public page.
 
     NOTE: This page is protected by anti-bot (e.g., Cloudflare). If we detect a
@@ -61,17 +60,21 @@ def track(parcel_number: str, *, language: str = "EN", lang: Optional[str] = Non
             rest_resp = client.get(rest_url, headers=json_headers)
             ctype = rest_resp.headers.get("Content-Type", "")
             if rest_resp.status_code == 200 and "application/json" in ctype.lower():
-                data = rest_resp.json()
+                plc_data = rest_resp.json()
                 # Normalize JSON payload (PLC structure)
                 try:
                     shipment = _normalize_dpd_plc_json(
-                        data, parcel_number, locale=locale, language_input=lang_code, normalized_from=normalized_from
+                        plc_data,
+                        parcel_number,
+                        locale=locale,
+                        language_input=lang_code,
+                        normalized_from=normalized_from,
                     )
                     return TrackingResponse(shipments=[shipment], provider="dpd")
                 except Exception:
                     # Fallback to generic embedded normalizer
                     try:
-                        shipment = _normalize_dpd_embedded(data, parcel_number)
+                        shipment = _normalize_dpd_embedded(plc_data, parcel_number)
                         return TrackingResponse(shipments=[shipment], provider="dpd")
                     except Exception:
                         pass
@@ -94,12 +97,21 @@ def track(parcel_number: str, *, language: str = "EN", lang: Optional[str] = Non
                 TrackingEvent(
                     timestamp=datetime.now(),
                     status="Anti-bot protection encountered. Unable to scrape page.",
+                    location=None,
                     details=(
                         "DPD public page is protected. Consider using an official DPD API "
                         "(with key) or a trusted proxy."
                     ),
+                    status_code=None,
+                    extras=None,
                 )
             ],
+            service_type=None,
+            origin=None,
+            destination=None,
+            estimated_delivery=None,
+            actual_delivery=None,
+            extras=None,
         )
         return TrackingResponse(shipments=[shipment], provider="dpd")
 
@@ -117,7 +129,11 @@ def track(parcel_number: str, *, language: str = "EN", lang: Optional[str] = Non
         else:
             # Fallback: inline scripts that assign to window.__* style variables
             content = script.string or script.text or ""
-            if content and ("__APOLLO_STATE__" in content or "__NUXT__" in content or "__NEXT_DATA__" in content):
+            if content and (
+                "__APOLLO_STATE__" in content
+                or "__NUXT__" in content
+                or "__NEXT_DATA__" in content
+            ):
                 json_candidates.append(content)
 
     data: Optional[Dict[str, Any]] = None
@@ -155,12 +171,21 @@ def track(parcel_number: str, *, language: str = "EN", lang: Optional[str] = Non
             TrackingEvent(
                 timestamp=datetime.now(),
                 status="No embedded tracking data found",
+                location=None,
                 details=(
                     "The public page may be a JS SPA or protected. Consider using an "
                     "official DPD API or provide a custom endpoint."
                 ),
+                status_code=None,
+                extras=None,
             )
         ],
+        service_type=None,
+        origin=None,
+        destination=None,
+        estimated_delivery=None,
+        actual_delivery=None,
+        extras=None,
     )
     return TrackingResponse(shipments=[shipment], provider="dpd")
 
@@ -188,9 +213,7 @@ def _extract_first_json_object(s: str) -> Optional[Dict[str, Any]]:
 
 def _looks_like_dpd_payload(obj: Dict[str, Any]) -> bool:
     text = str(obj).lower()
-    hints = [
-        "parcel", "events", "status", "shipment", "tracking"
-    ]
+    hints = ["parcel", "events", "status", "shipment", "tracking"]
     return any(h in text for h in hints)
 
 
@@ -203,10 +226,7 @@ def _normalize_dpd_plc_json(
     normalized_from: Optional[str] = None,
 ) -> Shipment:
     """Normalize JSON from /rest/plc/{locale}/{parcelLabelNumber} to our model."""
-    plc = (
-        obj.get("parcellifecycleResponse", {})
-        .get("parcelLifeCycleData", {})
-    )
+    plc = obj.get("parcellifecycleResponse", {}).get("parcelLifeCycleData", {})
     shipment_info = plc.get("shipmentInfo", {})
     status_info = plc.get("statusInfo", []) or []
     scan_info = (plc.get("scanInfo", {}) or {}).get("scan", []) or []
@@ -218,7 +238,9 @@ def _normalize_dpd_plc_json(
         for ev in scan_info:
             ts = _parse_iso_date(ev.get("date")) or _coerce_timestamp(ev)
             desc = (ev.get("scanDescription", {}) or {}).get("content", [])
-            status_text = (desc[0] if desc else None) or (ev.get("scanDescription", {}) or {}).get("label")
+            status_text = (desc[0] if desc else None) or (
+                ev.get("scanDescription", {}) or {}
+            ).get("label")
             location = (ev.get("scanData", {}) or {}).get("location")
             events.append(
                 TrackingEvent(
@@ -226,6 +248,8 @@ def _normalize_dpd_plc_json(
                     status=status_text or "",
                     location=location,
                     details=status_text,
+                    status_code=None,
+                    extras=None,
                 )
             )
     # Fallback to statusInfo milestones
@@ -236,7 +260,9 @@ def _normalize_dpd_plc_json(
                 continue
             ts = _parse_dpd_status_date(st.get("date"))
             desc = (st.get("description", {}) or {}).get("content", [])
-            status_text = (desc[0] if desc else None) or st.get("label") or st.get("status")
+            status_text = (
+                (desc[0] if desc else None) or st.get("label") or st.get("status")
+            )
             location = st.get("location")
             events.append(
                 TrackingEvent(
@@ -244,6 +270,8 @@ def _normalize_dpd_plc_json(
                     status=status_text or "",
                     location=location,
                     details=status_text,
+                    status_code=None,
+                    extras=None,
                 )
             )
 
@@ -307,7 +335,10 @@ def _normalize_dpd_embedded(obj: Dict[str, Any], parcel_number: str) -> Shipment
             TrackingEvent(
                 timestamp=ts or datetime.now(),
                 status=status or "",
+                location=None,
                 details=details,
+                status_code=None,
+                extras=None,
             )
         )
 
@@ -326,6 +357,12 @@ def _normalize_dpd_embedded(obj: Dict[str, Any], parcel_number: str) -> Shipment
         carrier="dpd",
         status=status_enum,
         events=tracking_events,
+        service_type=None,
+        origin=None,
+        destination=None,
+        estimated_delivery=None,
+        actual_delivery=None,
+        extras=None,
     )
 
 
@@ -339,7 +376,9 @@ def _find_first_events_list(obj: Dict[str, Any]) -> list[Dict[str, Any]]:
                 if isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
                     # Check if dicts look like events
                     keys = set().union(*(x.keys() for x in v))
-                    if any(k.lower() in ("status", "description", "state") for k in keys):
+                    if any(
+                        k.lower() in ("status", "description", "state") for k in keys
+                    ):
                         return v  # best guess
                 queue.append(v)
         elif isinstance(item, list):
@@ -368,7 +407,10 @@ async def track_async(
         try:
             resp = await ac.get(
                 f"{rest_base}/{locale}/{parcel_number}",
-                headers={"User-Agent": headers["User-Agent"], "Accept": "application/json"},
+                headers={
+                    "User-Agent": headers["User-Agent"],
+                    "Accept": "application/json",
+                },
                 timeout=20.0,
             )
             ctype = resp.headers.get("Content-Type", "")
@@ -472,7 +514,12 @@ def _coerce_timestamp(ev: Dict[str, Any]) -> Optional[datetime]:
             except Exception:
                 continue
         if isinstance(val, str):
-            for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y"):
+            for fmt in (
+                "%Y-%m-%dT%H:%M:%S%z",
+                "%Y-%m-%dT%H:%M:%S",
+                "%d/%m/%Y %H:%M",
+                "%d/%m/%Y",
+            ):
                 try:
                     return datetime.strptime(val, fmt)
                 except Exception:

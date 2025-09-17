@@ -73,16 +73,25 @@ def _fallback_response(carrier: str, code: str, exc: Exception) -> TrackingRespo
         provider_error_desc: Optional[str] = None
         body_snippet: Optional[str] = None
         try:
-            ctype = (resp.headers.get("Content-Type") or resp.headers.get("content-type") or "").lower()
+            ctype = (
+                resp.headers.get("Content-Type")
+                or resp.headers.get("content-type")
+                or ""
+            ).lower()
             if "json" in ctype:
                 body = resp.json()
                 # Try common fields
-                provider_error_code = str(
-                    (body.get("code")
-                     or body.get("error_code")
-                     or body.get("error")
-                     or "")
-                ).strip() or None
+                provider_error_code = (
+                    str(
+                        (
+                            body.get("code")
+                            or body.get("error_code")
+                            or body.get("error")
+                            or ""
+                        )
+                    ).strip()
+                    or None
+                )
                 provider_error_desc = (
                     body.get("message")
                     or body.get("error_description")
@@ -135,22 +144,29 @@ def _fallback_response(carrier: str, code: str, exc: Exception) -> TrackingRespo
             TrackingEvent(
                 timestamp=datetime.now(),
                 status=status_text,
+                location=None,
                 details=details,
                 status_code=status_code,
                 extras=ev_extras or None,
             )
         ],
+        service_type=None,
+        origin=None,
+        destination=None,
+        estimated_delivery=None,
+        actual_delivery=None,
+        extras=None,
     )
     return TrackingResponse(shipments=[shipment], provider=carrier)
 
 
 def print_human(tracking_response: TrackingResponse) -> None:
     print(f"Provider: {tracking_response.provider}")
-    
+
     if not tracking_response.has_shipments:
         print("No shipments found")
         return
-    
+
     for shipment in tracking_response.shipments:
         print(f"\nShipment: {shipment.tracking_number}")
         print(f"Carrier: {shipment.carrier}")
@@ -166,7 +182,7 @@ def print_human(tracking_response: TrackingResponse) -> None:
             if extra_bits:
                 status_line += f" (latest: {'; '.join(extra_bits)})"
         print(status_line)
-        
+
         # Show additional info if available
         if shipment.service_type:
             print(f"Service: {shipment.service_type}")
@@ -174,7 +190,7 @@ def print_human(tracking_response: TrackingResponse) -> None:
             print(f"Origin: {shipment.origin}")
         if shipment.destination:
             print(f"Destination: {shipment.destination}")
-        
+
         # Show events
         if not shipment.events:
             print("No tracking events")
@@ -191,8 +207,7 @@ def print_human(tracking_response: TrackingResponse) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="mylittletracker",
-        description="Personal parcels tracking CLI."
+        prog="mylittletracker", description="Personal parcels tracking CLI."
     )
     subparsers = parser.add_subparsers(dest="command")
 
@@ -210,8 +225,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_track.add_argument("--json", action="store_true", help="Output raw JSON payload")
-    p_track.add_argument("--strict", action="store_true", help="Propagate errors (non-zero exit) instead of returning fallback")
-    p_track.add_argument("--verbose", "-v", action="store_true", help="Print normalization notes and extra info")
+    p_track.add_argument(
+        "--strict",
+        action="store_true",
+        help="Propagate errors (non-zero exit) instead of returning fallback",
+    )
+    p_track.add_argument(
+        "--verbose", "-v", action="store_true", help="Print normalization notes and extra info"
+    )
     p_track.set_defaults(func=cmd_track)
 
     p_prov = subparsers.add_parser("providers", help="List supported carriers")
@@ -231,4 +252,3 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -85,7 +85,7 @@ def track(
             "DHL_API_KEY is not set. Add it to your environment or .env file."
         )
 
-    server = server or os.getenv("DHL_SERVER", "prod")
+    server = server or os.getenv("DHL_SERVER", "prod") or "prod"
     params: Dict[str, Any] = {
         "trackingNumber": tracking_number,
         "language": language,
@@ -109,9 +109,11 @@ def track(
         "DHL-API-Key": api_key,
     }
 
-    response = get_with_retries(_base_url(server), params=params, headers=headers, timeout=20.0)
+    response = get_with_retries(
+        _base_url(server), params=params, headers=headers, timeout=20.0
+    )
     raw_data = response.json()
-    
+
     return normalize_dhl_response(raw_data, tracking_number)
 
 
@@ -135,7 +137,7 @@ async def track_async(
             "DHL_API_KEY is not set. Add it to your environment or .env file."
         )
 
-    server = server or os.getenv("DHL_SERVER", "prod")
+    server = server or os.getenv("DHL_SERVER", "prod") or "prod"
     params: Dict[str, Any] = {
         "trackingNumber": tracking_number,
         "language": language,
@@ -167,22 +169,20 @@ async def track_async(
     return normalize_dhl_response(raw_data, tracking_number)
 
 
-def normalize_dhl_response(raw_data: Dict[str, Any], tracking_number: str) -> TrackingResponse:
+def normalize_dhl_response(
+    raw_data: Dict[str, Any], tracking_number: str
+) -> TrackingResponse:
     """Normalize DHL API response to universal TrackingResponse model."""
-    shipments = []
-    
+    shipments: list[Shipment] = []
+
     # Extract shipment data from DHL format
     shipment_list = raw_data.get("shipments", [])
     if not shipment_list:
         # No shipments found
-        return TrackingResponse(
-            shipments=shipments,
-            provider="dhl"
-        )
-    
+        return TrackingResponse(shipments=shipments, provider="dhl")
+
     dhl_shipment = shipment_list[0]  # Take first shipment
     events: list[TrackingEvent] = []
-    
     # Convert events
     for ev in dhl_shipment.get("events", []):
         # Parse timestamp
@@ -212,19 +212,19 @@ def normalize_dhl_response(raw_data: Dict[str, Any], tracking_number: str) -> Tr
             location=location,
             details=details_text,
             status_code=(ev.get("statusCode") or None),
+            extras=None,
         )
         events.append(tracking_event)
-    
+
     # Sort events for consistency (ascending time)
     events.sort(key=lambda e: e.timestamp)
 
     # Determine overall shipment status (prefer shipment.status.statusCode)
     status = _infer_dhl_status(dhl_shipment, events)
-    
+
     # Extract additional shipment details
     details = dhl_shipment.get("details", {})
     service_type = (details.get("product") or {}).get("productName")
-    
     # Extract origin and destination
     origin = None
     destination = None
@@ -233,13 +233,26 @@ def normalize_dhl_response(raw_data: Dict[str, Any], tracking_number: str) -> Tr
         origin_locality = origin_addr.get('addressLocality', '')
         origin_country = origin_addr.get('countryCode', '')
         origin = f"{origin_locality}, {origin_country}".strip(", ")
-    
+
     if "destination" in details:
         dest_addr = (details["destination"].get("address") or {})
         dest_locality = dest_addr.get('addressLocality', '')
         dest_country = dest_addr.get('countryCode', '')
         destination = f"{dest_locality}, {dest_country}".strip(", ")
     
+=======
+        origin_addr = details["origin"].get("address", {})
+        origin = f"{origin_addr.get('addressLocality', '')}, {origin_addr.get('countryCode', '')}".strip(
+            ", "
+        )
+
+    if "destination" in details:
+        dest_addr = details["destination"].get("address", {})
+        destination = f"{dest_addr.get('addressLocality', '')}, {dest_addr.get('countryCode', '')}".strip(
+            ", "
+        )
+
+>>>>>>> caf8804 (chore: WIP before integrating upstream main)
     shipment = Shipment(
         tracking_number=dhl_shipment.get("id", tracking_number),
         carrier="dhl",
@@ -247,15 +260,15 @@ def normalize_dhl_response(raw_data: Dict[str, Any], tracking_number: str) -> Tr
         events=events,
         service_type=service_type,
         origin=origin,
-        destination=destination
+        destination=destination,
+        estimated_delivery=None,
+        actual_delivery=None,
+        extras=None,
     )
-    
+
     shipments.append(shipment)
-    
-    return TrackingResponse(
-        shipments=shipments,
-        provider="dhl"
-    )
+
+    return TrackingResponse(shipments=shipments, provider="dhl")
 
 
 def _parse_dhl_timestamp(timestamp_str: str) -> datetime:
@@ -263,6 +276,7 @@ def _parse_dhl_timestamp(timestamp_str: str) -> datetime:
     return parse_dt_iso(timestamp_str) or datetime.now()
 
 
+<<<<<<< HEAD
 def _infer_dhl_status(dhl_shipment: Dict[str, Any], events: list[TrackingEvent]) -> ShipmentStatus:
     """Infer shipment status from DHL shipment data and events per UTAPI spec."""
     # 1) Shipment-level statusCode is canonical
@@ -296,4 +310,33 @@ def _infer_dhl_status(dhl_shipment: Dict[str, Any], events: list[TrackingEvent])
             return mapped
 
     return ShipmentStatus.UNKNOWN
+=======
+def _infer_dhl_status(
+    dhl_shipment: Dict[str, Any], events: list[TrackingEvent]
+) -> ShipmentStatus:
+    """Infer shipment status from DHL shipment data and events."""
+    # Check shipment status first
+    shipment_status = dhl_shipment.get("status", {}).get("status", "").lower()
 
+    if "delivered" in shipment_status:
+        return ShipmentStatus.DELIVERED
+    elif "transit" in shipment_status:
+        return ShipmentStatus.IN_TRANSIT
+    elif "exception" in shipment_status:
+        return ShipmentStatus.EXCEPTION
+
+    # Check latest event if shipment status is not clear
+    if events:
+        latest_status = events[-1].status.lower()
+
+        if "delivered" in latest_status:
+            return ShipmentStatus.DELIVERED
+        elif "out for delivery" in latest_status or "delivery" in latest_status:
+            return ShipmentStatus.OUT_FOR_DELIVERY
+        elif "transit" in latest_status or "departed" in latest_status:
+            return ShipmentStatus.IN_TRANSIT
+        elif "received" in latest_status or "processed" in latest_status:
+            return ShipmentStatus.INFORMATION_RECEIVED
+>>>>>>> caf8804 (chore: WIP before integrating upstream main)
+
+    return ShipmentStatus.UNKNOWN

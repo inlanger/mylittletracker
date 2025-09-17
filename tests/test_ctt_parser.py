@@ -1,5 +1,3 @@
-import pytest
-
 from mylittletracker.providers.ctt import normalize_ctt_response
 from mylittletracker.models import ShipmentStatus
 

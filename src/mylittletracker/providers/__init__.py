@@ -3,6 +3,7 @@
 Expose a simple mapping from provider name to its track() callable, so the CLI
 and other clients can register providers in one place.
 """
+
 from __future__ import annotations
 
 from typing import Callable
