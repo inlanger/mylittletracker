@@ -1,0 +1,330 @@
+"""
+Ecoscooting tracking provider using the Cainiao API.
+
+Ecoscooting uses Cainiao's logistics network for package tracking.
+This provider directly calls the Cainiao API to get real-time tracking data.
+"""
+
+import re
+import json
+import httpx
+from datetime import datetime, timezone, timedelta
+from typing import List, Optional, Dict, Any
+
+from ..models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
+from ..utils import get_with_retries, async_get_with_retries
+
+
+def _parse_ecoscooting_date(date_str: str) -> datetime:
+    """Parse Ecoscooting date format: '2025-09-12 12:54:13 UTC+1'."""
+    # Extract date, time, and timezone offset
+    match = re.match(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC([+-]\d+)', date_str)
+    if not match:
+        # Fallback to current time if parsing fails
+        return datetime.now(timezone.utc)
+
+    dt_str, tz_offset = match.groups()
+    dt = datetime.strptime(dt_str, '%Y-%m-%d %H:%M:%S')
+
+    # Apply timezone offset
+    offset_hours = int(tz_offset)
+    if offset_hours != 0:
+        dt = dt.replace(tzinfo=timezone(timedelta(hours=offset_hours)))
+    else:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    return dt
+
+
+def _map_ecoscooting_status(status_group: str) -> ShipmentStatus:
+    """Map Ecoscooting/Cainiao status group to unified ShipmentStatus."""
+    if not status_group:
+        return ShipmentStatus.UNKNOWN
+
+    status_lower = status_group.lower()
+
+    if status_lower == 'delivered':
+        return ShipmentStatus.DELIVERED
+    elif status_lower == 'ready_for_collection':
+        return ShipmentStatus.AVAILABLE_FOR_PICKUP
+    elif status_lower == 'delivering':
+        return ShipmentStatus.OUT_FOR_DELIVERY
+    elif status_lower == 'in_transit':
+        return ShipmentStatus.IN_TRANSIT
+    else:
+        return ShipmentStatus.UNKNOWN
+
+
+def _call_cainiao_api(tracking_number: str) -> Dict[str, Any]:
+    """Call the Cainiao API directly to get tracking data."""
+    import json
+
+    url = "https://de-link.cainiao.com/gateway/link.do"
+
+    # The exact parameters from the browser request
+    data = {
+        "logistics_interface": json.dumps({
+            "mailNo": tracking_number,
+            "locale": "en_US",
+            "role": "endUser"
+        }),
+        "msg_type": "CN_OVERSEA_LOGISTICS_INQUIRY_TRACKING",
+        "logistic_provider_id": "DISTRIBUTOR_30250031",
+        "data_digest": "suibianxie",  # This seems to be a placeholder value that works
+        "to_code": "CNL_EU"
+    }
+
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Origin": "https://ecoscooting.com",
+        "Referer": f"https://ecoscooting.com/tracking/{tracking_number}",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9"
+    }
+
+    try:
+        response = get_with_retries(
+            url,
+            method="POST",
+            data=data,
+            headers=headers
+        )
+
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise RuntimeError(f"API returned status {response.status_code}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to call Cainiao API: {e}")
+
+
+def track(tracking_number: str) -> TrackingResponse:
+    """
+    Fetch tracking info for an Ecoscooting shipment using httpx.
+
+    Args:
+        tracking_number: The tracking number to look up
+
+    Returns:
+        TrackingResponse with normalized tracking data
+    """
+    try:
+        # Call the Cainiao API
+        data = _call_cainiao_api(tracking_number)
+
+        # Check if the API call was successful
+        if data.get('success') != 'true':
+            raise RuntimeError(f"API returned success=false")
+
+        # Parse events from API response
+        events: List[TrackingEvent] = []
+        for event_data in data.get('statuses', []):
+            event = TrackingEvent(
+                timestamp=_parse_ecoscooting_date(event_data['datetime']),
+                status=event_data['statusName'],
+                details=event_data.get('description')
+            )
+            events.append(event)
+
+        # Get package info
+        package_info = data.get('packageParam', {})
+        destination_city = package_info.get('toCity')
+        destination_zip = package_info.get('toZipcode')
+
+        # Get PUDO station info if available
+        pop_station = data.get('popStationParam', {})
+        station_name = pop_station.get('stationName')
+        station_address = pop_station.get('detailAddress')
+
+        # Build destination string
+        destination_parts = []
+        if destination_city:
+            destination_parts.append(destination_city)
+        if destination_zip:
+            destination_parts.append(destination_zip)
+        if station_name:
+            destination_parts.append(f"PUDO: {station_name}")
+        if station_address:
+            destination_parts.append(station_address)
+
+        destination = ", ".join(destination_parts) if destination_parts else None
+
+        # Determine overall shipment status from the most recent event
+        shipment_status = ShipmentStatus.UNKNOWN
+        if events:
+            # Get status from the most recent event's statusGroup
+            latest_event = data.get('statuses', [])[0]
+            shipment_status = _map_ecoscooting_status(latest_event.get('statusGroup', ''))
+
+        # Create shipment
+        shipment = Shipment(
+            tracking_number=tracking_number,
+            carrier='Ecoscooting',
+            status=shipment_status,
+            events=events,
+            destination=destination
+        )
+
+        # Check if actually delivered
+        if events and shipment_status == ShipmentStatus.DELIVERED:
+            shipment.actual_delivery = events[0].timestamp
+
+        return TrackingResponse(
+            shipments=[shipment],
+            provider='ecoscooting'
+        )
+
+    except Exception as e:
+        # Return error response
+        return TrackingResponse(
+            shipments=[
+                Shipment(
+                    tracking_number=tracking_number,
+                    carrier='Ecoscooting',
+                    status=ShipmentStatus.UNKNOWN,
+                    events=[
+                        TrackingEvent(
+                            timestamp=datetime.now(timezone.utc),
+                            status="Error fetching tracking data",
+                            details=str(e)
+                        )
+                    ]
+                )
+            ],
+            provider='ecoscooting'
+        )
+
+
+async def atrack(tracking_number: str) -> TrackingResponse:
+    """
+    Async version of track() for Ecoscooting shipments.
+
+    Args:
+        tracking_number: The tracking number to look up
+
+    Returns:
+        TrackingResponse with normalized tracking data
+    """
+    try:
+        # For async version, we'll need to use sync API for now
+        # TODO: Implement proper async version with httpx.AsyncClient
+        import json
+
+        url = "https://de-link.cainiao.com/gateway/link.do"
+
+        # The exact parameters from the browser request
+        data = {
+            "logistics_interface": json.dumps({
+                "mailNo": tracking_number,
+                "locale": "en_US",
+                "role": "endUser"
+            }),
+            "msg_type": "CN_OVERSEA_LOGISTICS_INQUIRY_TRACKING",
+            "logistic_provider_id": "DISTRIBUTOR_30250031",
+            "data_digest": "suibianxie",
+            "to_code": "CNL_EU"
+        }
+
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": "https://ecoscooting.com",
+            "Referer": f"https://ecoscooting.com/tracking/{tracking_number}",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9"
+        }
+
+        response = await async_get_with_retries(
+            url,
+            method="POST",
+            data=data,
+            headers=headers
+        )
+
+        if response.status_code != 200:
+            raise RuntimeError(f"API returned status {response.status_code}")
+
+        api_data = response.json()
+
+        # Check if the API call was successful
+        if api_data.get('success') != 'true':
+            raise RuntimeError(f"API returned success=false")
+
+        # Parse events from API response
+        events: List[TrackingEvent] = []
+        for event_data in api_data.get('statuses', []):
+            event = TrackingEvent(
+                timestamp=_parse_ecoscooting_date(event_data['datetime']),
+                status=event_data['statusName'],
+                details=event_data.get('description')
+            )
+            events.append(event)
+
+        # Get package info
+        package_info = api_data.get('packageParam', {})
+        destination_city = package_info.get('toCity')
+        destination_zip = package_info.get('toZipcode')
+
+        # Get PUDO station info if available
+        pop_station = api_data.get('popStationParam', {})
+        station_name = pop_station.get('stationName')
+        station_address = pop_station.get('detailAddress')
+
+        # Build destination string
+        destination_parts = []
+        if destination_city:
+            destination_parts.append(destination_city)
+        if destination_zip:
+            destination_parts.append(destination_zip)
+        if station_name:
+            destination_parts.append(f"PUDO: {station_name}")
+        if station_address:
+            destination_parts.append(station_address)
+
+        destination = ", ".join(destination_parts) if destination_parts else None
+
+        # Determine overall shipment status from the most recent event
+        shipment_status = ShipmentStatus.UNKNOWN
+        if events:
+            # Get status from the most recent event's statusGroup
+            latest_event = api_data.get('statuses', [])[0]
+            shipment_status = _map_ecoscooting_status(latest_event.get('statusGroup', ''))
+
+        # Create shipment
+        shipment = Shipment(
+            tracking_number=tracking_number,
+            carrier='Ecoscooting',
+            status=shipment_status,
+            events=events,
+            destination=destination
+        )
+
+        # Check if actually delivered
+        if events and shipment_status == ShipmentStatus.DELIVERED:
+            shipment.actual_delivery = events[0].timestamp
+
+        return TrackingResponse(
+            shipments=[shipment],
+            provider='ecoscooting'
+        )
+
+    except Exception as e:
+        # Return error response
+        return TrackingResponse(
+            shipments=[
+                Shipment(
+                    tracking_number=tracking_number,
+                    carrier='Ecoscooting',
+                    status=ShipmentStatus.UNKNOWN,
+                    events=[
+                        TrackingEvent(
+                            timestamp=datetime.now(timezone.utc),
+                            status="Error fetching tracking data",
+                            details=str(e)
+                        )
+                    ]
+                )
+            ],
+            provider='ecoscooting'
+        )
