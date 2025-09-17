@@ -1,6 +1,6 @@
 # mylittletracker
 
-A small, modern CLI to track parcels from multiple carriers (Correos, DHL, CTT Express, DPD, GLS). It uses httpx for HTTP calls and a unified Pydantic v2 model to normalize responses across providers.
+A small, modern CLI to track parcels from multiple carriers (Correos, DHL, CTT Express, DPD, GLS, Ecoscooting). It uses httpx for HTTP calls and a unified Pydantic v2 model to normalize responses across providers.
 
 ## Features
 - src/ layout, PEP 621 metadata in `pyproject.toml`
@@ -10,6 +10,7 @@ A small, modern CLI to track parcels from multiple carriers (Correos, DHL, CTT E
   - DHL (Unified Shipment Tracking API)
   - DPD (public PLC JSON endpoint)
   - CTT Express (public JSON endpoint)
+  - Ecoscooting (Cainiao logistics API)
 - Unified Pydantic v2 model (TrackingResponse → Shipment → TrackingEvent)
 - httpx for robust HTTP requests
 - Integration tests with pytest markers (skip when creds aren’t provided)
@@ -67,10 +68,51 @@ Track a CTT Express shipment (no key required):
 mylittletracker track ctt 0082800082909720118884 --json
 ```
 
+Track an Ecoscooting shipment (no key required):
+
+```bash
+mylittletracker track ecoscooting 460070000000000001 --json
+```
+
 Add `--json` to print normalized JSON from the unified model:
 
 ```bash
 mylittletracker track correos PK43BG0440928440146007C --json
+```
+
+### Language handling
+
+The CLI normalizes `--language` globally per provider so common inputs work consistently:
+
+- DPD (PLC JSON): expects a locale like `en_US`, `nl_NL`, `de_DE`, `fr_FR`, `it_IT`, `es_ES`.
+  - Inputs like `en`, `EN-us`, `en_us` are normalized to `en_US`.
+  - Unknown values fall back to `en_US`.
+  - The normalized locale is included in the JSON under `shipments[].extras.dpd_locale`.
+- GLS: uses two-letter, upper-case (e.g., `EN`, `ES`) in `Accept-Language`.
+  - Inputs like `en-us` normalize to `EN`.
+- DHL (UTAPI): uses two-letter, lower-case (e.g., `en`, `es`) for the `language` parameter.
+  - Inputs like `EN` normalize to `en`.
+- Correos/CTT: two-letter, upper-case (e.g., `EN`, `ES`).
+- Ecoscooting: uses locale `en_US` internally for the Cainiao API.
+
+Notes:
+- When not using `--json`, the CLI prints a small note if your language input was normalized (e.g., `Note: normalized language 'EN-us' -> 'en_US' for dpd`).
+- Providers may also perform their own internal normalization as needed.
+
+Examples:
+
+```bash
+# DPD: accepts EN-us, normalizes to en_US
+mylittletracker track dpd 05162815323093 --language EN-us --json
+
+# GLS: accepts en-us, normalizes to EN
+mylittletracker track gls 92592437886 --language en-us --json
+
+# DHL: accepts EN, normalizes to en
+mylittletracker track dhl CH515858672DE --language EN --json
+
+# Correos: accepts en-us, normalizes to EN
+mylittletracker track correos PK43BG0440928440146007C --language en-us --json
 ```
 
 ## Library usage (async)
@@ -117,6 +159,7 @@ Notes:
 - Correos does not require a key.
 - DPD does not require a key.
 - CTT Express does not require a key.
+- Ecoscooting does not require a key.
 
 ## Unified model (Pydantic v2)
 

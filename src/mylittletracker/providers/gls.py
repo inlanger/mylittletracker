@@ -127,9 +127,13 @@ async def track_async(
 
     if client is None:
         # Reuse async helper without persistent client
-        resp = await async_get_with_retries(url, headers=headers, params=params, timeout=20.0)
+        resp = await async_get_with_retries(
+            url, headers=headers, params=params, timeout=20.0
+        )
     else:
-        resp = await async_get_with_retries(url, headers=headers, params=params, timeout=20.0, client=client)
+        resp = await async_get_with_retries(
+            url, headers=headers, params=params, timeout=20.0, client=client
+        )
     raw = resp.json()
 
     return normalize_gls_parcels_response(raw)
@@ -158,8 +162,7 @@ def normalize_gls_parcels_response(raw: Dict[str, Any]) -> TrackingResponse:
     parcels = (raw or {}).get("parcels", []) or []
     for p in parcels:
         unitno = p.get("unitno")
-        error_code = p.get("errorCode")
-        error_message = p.get("errorMessage")
+        # error fields exist only when parcel entry is an error record; we skip when no unitno
         if not unitno:
             # Skip error-only entries (no parcel data)
             # Could also collect these into a special shipment with EXCEPTION, but keep consistent with others.
@@ -173,7 +176,9 @@ def normalize_gls_parcels_response(raw: Dict[str, Any]) -> TrackingResponse:
         for ev in p.get("events", []) or []:
             ts = parse_dt_iso(ev.get("eventDateTime")) or datetime.now()
             desc = ev.get("description") or ev.get("code") or ""
-            loc = _compose_location(ev.get("city"), ev.get("postalCode"), ev.get("country"))
+            loc = _compose_location(
+                ev.get("city"), ev.get("postalCode"), ev.get("country")
+            )
             events.append(
                 TrackingEvent(
                     timestamp=ts,
@@ -181,6 +186,7 @@ def normalize_gls_parcels_response(raw: Dict[str, Any]) -> TrackingResponse:
                     location=loc,
                     details=desc,
                     status_code=ev.get("code"),
+                    extras=None,
                 )
             )
 
@@ -192,14 +198,21 @@ def normalize_gls_parcels_response(raw: Dict[str, Any]) -> TrackingResponse:
             carrier="gls",
             status=status_enum,
             events=events,
+            service_type=None,
+            origin=None,
+            destination=None,
+            estimated_delivery=None,
+            actual_delivery=None,
+            extras=None,
         )
         shipments.append(shipment)
 
     return TrackingResponse(shipments=shipments, provider="gls")
 
 
-def _compose_location(city: Optional[str], postal: Optional[str], country: Optional[str]) -> Optional[str]:
-    parts: List[str] = []
+def _compose_location(
+    city: Optional[str], postal: Optional[str], country: Optional[str]
+) -> Optional[str]:
     city = (city or "").strip()
     postal = (postal or "").strip()
     country = (country or "").strip()

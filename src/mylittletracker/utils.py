@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional, Iterable
+from typing import Optional, Iterable, Any
 import time
 import asyncio
+import os
 
 import httpx
 
@@ -64,15 +65,28 @@ def get_with_retries(
     max_attempts: int = 3,
     backoff_base: float = 0.5,
     status_forcelist: Iterable[int] = (500, 502, 503, 504),
+    method: str = "GET",
+    data: Optional[Any] = None,
+    json: Optional[Any] = None,
 ) -> httpx.Response:
-    """HTTP GET with simple retries for transient errors."""
+    """HTTP request with simple retries for transient errors.
+
+    Supports GET/POST by specifying method; forwards data/json payloads when provided.
+    """
     attempt = 0
     last_exc: Optional[Exception] = None
     while attempt < max_attempts:
         attempt += 1
         try:
             with httpx.Client(timeout=timeout) as client:
-                resp = client.get(url, params=params, headers=headers)
+                resp = client.request(
+                    method.upper(),
+                    url,
+                    params=params,
+                    headers=headers,
+                    data=data,
+                    json=json,
+                )
                 if resp.status_code in status_forcelist and attempt < max_attempts:
                     time.sleep(backoff_base * (2 ** (attempt - 1)))
                     continue
@@ -103,8 +117,11 @@ async def async_get_with_retries(
     backoff_base: float = 0.5,
     status_forcelist: Iterable[int] = (500, 502, 503, 504),
     client: Optional[httpx.AsyncClient] = None,
+    method: str = "GET",
+    data: Optional[Any] = None,
+    json: Optional[Any] = None,
 ) -> httpx.Response:
-    """Async HTTP GET with simple retries for transient errors."""
+    """Async HTTP request with simple retries for transient errors."""
     attempt = 0
     last_exc: Optional[Exception] = None
     while attempt < max_attempts:
@@ -112,9 +129,23 @@ async def async_get_with_retries(
         try:
             if client is None:
                 async with httpx.AsyncClient(timeout=timeout) as ac:
-                    resp = await ac.get(url, params=params, headers=headers)
+                    resp = await ac.request(
+                        method.upper(),
+                        url,
+                        params=params,
+                        headers=headers,
+                        data=data,
+                        json=json,
+                    )
             else:
-                resp = await client.get(url, params=params, headers=headers)
+                resp = await client.request(
+                    method.upper(),
+                    url,
+                    params=params,
+                    headers=headers,
+                    data=data,
+                    json=json,
+                )
             if resp.status_code in status_forcelist and attempt < max_attempts:
                 await asyncio.sleep(backoff_base * (2 ** (attempt - 1)))
                 continue
@@ -153,11 +184,111 @@ def map_status_from_text(text: Optional[str]) -> ShipmentStatus:
         return ShipmentStatus.DELIVERED
     if "out for delivery" in t or "in delivery" in t or "reparto" in t:
         return ShipmentStatus.OUT_FOR_DELIVERY
-    if "in transit" in t or "transit" in t or "depot" in t or "sorted" in t or "on the way" in t:
+    if (
+        "in transit" in t
+        or "transit" in t
+        or "depot" in t
+        or "sorted" in t
+        or "on the way" in t
+    ):
         return ShipmentStatus.IN_TRANSIT
-    if "pickup" in t or "accepted" in t or "admitido" in t or "pre-registered" in t or "pre registered" in t:
+    if (
+        "pickup" in t
+        or "accepted" in t
+        or "admitido" in t
+        or "pre-registered" in t
+        or "pre registered" in t
+    ):
         return ShipmentStatus.INFORMATION_RECEIVED
     if "exception" in t or "failed" in t or "undeliverable" in t:
         return ShipmentStatus.EXCEPTION
     return ShipmentStatus.UNKNOWN
 
+
+def normalize_language(
+    language: Optional[str], provider: Optional[str]
+) -> tuple[str, Optional[str]]:
+    """Globally normalize language parameter per provider expectations.
+
+    Returns a tuple (normalized_value, normalized_from). If normalization was not
+    needed, normalized_from is None.
+    """
+    # Canonical two-letter languages we support
+    allowed = {"en", "es", "de", "fr", "it", "nl"}
+
+    # Determine default language (two-letter) from env or system locale
+    def _detect_default_lang() -> str:
+        env_candidates = [
+            os.getenv("MLT_DEFAULT_LANGUAGE"),
+            os.getenv("MYLITTLETRACKER_DEFAULT_LANGUAGE"),
+            os.getenv("LANG"),
+            os.getenv("LC_ALL"),
+        ]
+        for val in env_candidates:
+            if not val:
+                continue
+            v = val.strip()
+            if not v:
+                continue
+            v2 = v.replace("-", "_")
+            # Try patterns like es, es_ES, es_ES.UTF-8
+            lang2 = v2.split("_", 1)[0].split(".", 1)[0].lower()
+            if lang2 in allowed:
+                return lang2
+        return "en"  # final fallback
+
+    default_two_letter = _detect_default_lang()
+
+    # Default
+    lang = (language or default_two_letter).strip()
+    prov = (provider or "").lower()
+
+    # Helper: split on hyphen/underscore and keep first two chars for lang
+    def split_lang(s: str) -> tuple[str, Optional[str]]:
+        s2 = s.replace("-", "_")
+        if "_" in s2 and len(s2) >= 5:
+            return s2[:2].lower(), s2[3:5].upper()
+        return s2[:2].lower(), None
+
+    # DPD expects a PLC locale like en_US
+    if prov == "dpd":
+        lang2, region = split_lang(lang)
+        mapping = {
+            "en": "en_US",
+            "nl": "nl_NL",
+            "de": "de_DE",
+            "fr": "fr_FR",
+            "it": "it_IT",
+            "es": "es_ES",
+        }
+        normalized = None
+        if region:
+            candidate = f"{lang2}_{region}"
+            if candidate in mapping.values():
+                normalized = candidate
+        if not normalized:
+            normalized = (
+                mapping.get(lang2) if lang2 in allowed else mapping[default_two_letter]
+            )
+        normalized_nonnull = normalized or default_two_letter
+        return (
+            normalized_nonnull,
+            lang if normalized_nonnull.lower() != (lang or "").lower() else None,
+        )
+
+    # GLS wants two-letter upper-case Accept-Language
+    if prov == "gls":
+        lang2, _ = split_lang(lang)
+        normalized = (lang2 if lang2 in allowed else default_two_letter).upper()
+        return (normalized, lang if (lang or "") != normalized else None)
+
+    # DHL UTAPI uses two-letter lower-case (default en)
+    if prov == "dhl":
+        lang2, _ = split_lang(lang)
+        normalized = (lang2 if lang2 in allowed else default_two_letter).lower()
+        return (normalized, lang if (lang or "") != normalized else None)
+
+    # Correos/CTT and others: safer to use two-letter upper-case (they accept that)
+    lang2, _ = split_lang(lang)
+    normalized = (lang2 if lang2 in allowed else default_two_letter).upper()
+    return (normalized, lang if (lang or "") != normalized else None)

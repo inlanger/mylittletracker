@@ -48,7 +48,9 @@ async def track_async(
     return normalize_ctt_response(raw, sc)
 
 
-def normalize_ctt_response(raw: Dict[str, Any], tracking_number: str) -> TrackingResponse:
+def normalize_ctt_response(
+    raw: Dict[str, Any], tracking_number: str
+) -> TrackingResponse:
     """Normalize CTT Express JSON payload to TrackingResponse."""
     data = (raw or {}).get("data") or {}
     shipments: List[Shipment] = []
@@ -56,20 +58,22 @@ def normalize_ctt_response(raw: Dict[str, Any], tracking_number: str) -> Trackin
     if not data:
         return TrackingResponse(shipments=shipments, provider="ctt")
 
-    shipping_history = (data.get("shipping_history") or {})
-    raw_events = (shipping_history.get("events") or [])
+    shipping_history = data.get("shipping_history") or {}
+    raw_events = shipping_history.get("events") or []
 
     events: List[TrackingEvent] = []
     for ev in raw_events:
         # Prefer precise event datetime, fallback to event_date
-        dt_str = ((ev.get("detail") or {}).get("item_event_datetime")) or ev.get("event_date")
+        dt_str = ((ev.get("detail") or {}).get("item_event_datetime")) or ev.get(
+            "event_date"
+        )
         ts = parse_dt_iso(dt_str) or datetime.now()
 
         desc = ev.get("description") or ev.get("type") or ""
         status_code = ev.get("code")
 
         # Details: include courier code/text if present and meaningful
-        det = (ev.get("detail") or {})
+        det = ev.get("detail") or {}
         details = None
         for k in ("item_event_text", "External_event_text", "event_courier_code"):
             v = det.get(k)
@@ -81,6 +85,7 @@ def normalize_ctt_response(raw: Dict[str, Any], tracking_number: str) -> Trackin
             TrackingEvent(
                 timestamp=ts,
                 status=desc,
+                location=None,
                 details=details,
                 status_code=status_code,
                 extras={
@@ -101,7 +106,11 @@ def normalize_ctt_response(raw: Dict[str, Any], tracking_number: str) -> Trackin
     destination = data.get("destin_name") or data.get("destin_province_name")
 
     # Estimated vs actual delivery
-    est_str = data.get("committed_delivery_datetime") or data.get("reported_delivery_date") or data.get("delivery_date")
+    est_str = (
+        data.get("committed_delivery_datetime")
+        or data.get("reported_delivery_date")
+        or data.get("delivery_date")
+    )
     estimated_delivery = parse_dt_iso(est_str) if est_str else None
     actual_delivery = None
     if status == ShipmentStatus.DELIVERED:
@@ -132,6 +141,7 @@ def normalize_ctt_response(raw: Dict[str, Any], tracking_number: str) -> Trackin
         destination=destination,
         estimated_delivery=estimated_delivery,
         actual_delivery=actual_delivery,
+        service_type=None,
         extras=extras,
     )
     shipments.append(shipment)
@@ -196,16 +206,29 @@ def _infer_ctt_status(events: List[TrackingEvent]) -> ShipmentStatus:
 
     def _norm(t: str) -> str:
         # Remove accents and lowercase for robust matching
-        return "".join(c for c in unicodedata.normalize("NFD", t.lower()) if unicodedata.category(c) != "Mn")
+        return "".join(
+            c
+            for c in unicodedata.normalize("NFD", t.lower())
+            if unicodedata.category(c) != "Mn"
+        )
 
     t = _norm(text)
 
     # Common Spanish phrases seen in CTT payloads
     if "entregado" in t or "entrega realizada" in t:
         return ShipmentStatus.DELIVERED
-    if "entrega hoy" in t or "en reparto" in t or "reparto" in t or "delivery today" in t:
+    if (
+        "entrega hoy" in t
+        or "en reparto" in t
+        or "reparto" in t
+        or "delivery today" in t
+    ):
         return ShipmentStatus.OUT_FOR_DELIVERY
-    if "disponible para recoger" in t or "para recoger" in t or "punto de recogida" in t:
+    if (
+        "disponible para recoger" in t
+        or "para recoger" in t
+        or "punto de recogida" in t
+    ):
         return ShipmentStatus.AVAILABLE_FOR_PICKUP
     if "transito" in t or "en transito" in t or "in transit" in t:
         return ShipmentStatus.IN_TRANSIT
