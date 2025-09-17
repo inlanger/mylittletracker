@@ -28,17 +28,14 @@ _LANG_TO_LOCALE = {
 }
 
 
-def track(
-    parcel_number: str, *, language: str = "EN", lang: Optional[str] = None
-) -> TrackingResponse:
+def track(parcel_number: str, *, language: str = "EN") -> TrackingResponse:
     """Attempt to retrieve DPD tracking by scraping the public page.
 
     NOTE: This page is protected by anti-bot (e.g., Cloudflare). If we detect a
     challenge page or cannot find embedded JSON, we'll return an empty
     TrackingResponse and advise using an official API instead.
     """
-    # prefer 'language' but allow legacy 'lang'
-    lang_code_raw = lang or language or "EN"
+    lang_code_raw = language or "EN"
     lang_code = lang_code_raw.strip()
     url = f"{BASE_PAGE}?parcelNumber={parcel_number}&lang={lang_code.lower()}"
     headers = {
@@ -396,11 +393,10 @@ async def track_async(
     parcel_number: str,
     *,
     language: str = "EN",
-    lang: Optional[str] = None,
     client: Optional[httpx.AsyncClient] = None,
 ) -> TrackingResponse:
     """Async version of DPD tracking (PLC JSON first, fallback to HTML)."""
-    lang_code_raw = lang or language or "EN"
+    lang_code_raw = language or "EN"
     lang_code = lang_code_raw.strip()
     headers = {
         "User-Agent": "mylittletracker/0.1 (+https://example.com)",
@@ -443,13 +439,13 @@ async def track_async(
             if plc is not None:
                 return plc
             # Fallback to HTML scrape path
-            return track(parcel_number, language=language, lang=lang)
+            return track(parcel_number, language=language)
     else:
         plc = await _request_plc(client)
         if plc is not None:
             return plc
         # Fallback to sync HTML scrape as the last resort
-        return track(parcel_number, language=language, lang=lang)
+        return track(parcel_number, language=language)
 
 
 def _resolve_locale(lang_code: str) -> Tuple[str, Optional[str]]:
