@@ -5,6 +5,7 @@ import unicodedata
 
 from ..models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
 from ..utils import parse_dt_iso, get_with_retries, async_get_with_retries
+from .base import ProviderBase
 
 BASE_URL = "https://wct.cttexpress.com/p_track_redis.php"
 
@@ -239,3 +240,38 @@ def _infer_ctt_status(events: List[TrackingEvent]) -> ShipmentStatus:
     from ..utils import map_status_from_text
 
     return map_status_from_text(text)
+
+
+def build_tracking_url(sc: str, *, language: Optional[str] = None) -> Optional[str]:
+    """Return a human-facing CTT tracking URL if a stable pattern is confirmed.
+
+    TODO: Confirm official public URL pattern; returning None for now to avoid
+    exposing a non-working link in the CLI.
+    """
+    return None
+
+
+class CTTProvider(ProviderBase):
+    """Thin wrapper around module-level CTT functions with optional URL builder."""
+
+    provider = "ctt"
+
+    def build_tracking_url(
+        self, tracking_number: str, *, language: Optional[str] = None, **kwargs: Any
+    ) -> Optional[str]:
+        return build_tracking_url(tracking_number, language=language)
+
+    def track(
+        self, tracking_number: str, *, language: Optional[str] = None, **kwargs: Any
+    ) -> TrackingResponse:
+        return track(sc=tracking_number, language=language)
+
+    async def track_async(
+        self,
+        tracking_number: str,
+        *,
+        language: Optional[str] = None,
+        client: Optional[httpx.AsyncClient] = None,
+        **kwargs: Any,
+    ) -> TrackingResponse:
+        return await track_async(sc=tracking_number, language=language, client=client)

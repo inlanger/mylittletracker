@@ -8,10 +8,14 @@ This provider directly calls the Cainiao API to get real-time tracking data.
 import re
 import json
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+from urllib.parse import quote
+
+import httpx
 
 from ..models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
 from ..utils import get_with_retries, async_get_with_retries
+from .base import ProviderBase
 
 # Ecoscooting/Cainiao API Constants (discovered via reverse engineering)
 CAINIAO_API_URL = "https://de-link.cainiao.com/gateway/link.do"
@@ -417,3 +421,35 @@ async def atrack(tracking_number: str) -> TrackingResponse:
             ],
             provider="ecoscooting",
         )
+
+
+def build_tracking_url(tracking_number: str, *, language: str = "es") -> Optional[str]:
+    """Return a human-facing Ecoscooting tracking URL for this shipment."""
+    return f"https://ecoscooting.com/tracking/{quote(tracking_number)}"
+
+
+class EcoscootingProvider(ProviderBase):
+    """Thin wrapper around module-level Ecoscooting functions with URL builder."""
+
+    provider = "ecoscooting"
+
+    def build_tracking_url(
+        self, tracking_number: str, *, language: Optional[str] = None, **kwargs: Any
+    ) -> Optional[str]:
+        return build_tracking_url(tracking_number, language=language or "es")
+
+    def track(
+        self, tracking_number: str, *, language: str = "en", **kwargs: Any
+    ) -> TrackingResponse:
+        return track(tracking_number, language=language)
+
+    async def track_async(
+        self,
+        tracking_number: str,
+        *,
+        language: str = "en",
+        client: Optional[httpx.AsyncClient] = None,
+        **kwargs: Any,
+    ) -> TrackingResponse:
+        # Delegate to existing async function name (atrack)
+        return await atrack(tracking_number)

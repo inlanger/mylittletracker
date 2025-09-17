@@ -8,9 +8,11 @@ from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
 import httpx
+from urllib.parse import quote
 
 from ..models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
 from ..utils import get_with_retries, async_get_with_retries
+from .base import ProviderBase
 
 
 # DPD Public PLC (Parcel Life Cycle) API endpoint
@@ -390,6 +392,18 @@ async def track_async(
     return TrackingResponse(shipments=[shipment], provider="dpd")
 
 
+def build_tracking_url(parcel_number: str, *, language: str = "EN") -> Optional[str]:
+    """Return a human-facing DPD tracking URL for this shipment.
+
+    Pattern: https://tracking.dpd.de/status/{locale}/parcel/{parcel_number}
+    Locale is resolved using the same mapping as the PLC API.
+    """
+    lang_code_raw = language or "EN"
+    lang_code = lang_code_raw.strip()
+    locale, _ = _resolve_locale(lang_code)
+    return f"https://tracking.dpd.de/status/{locale}/parcel/{quote(parcel_number)}"
+
+
 def _resolve_locale(lang_code: str) -> Tuple[str, Optional[str]]:
     """Resolve an input language or locale to a supported PLC locale.
 
@@ -433,6 +447,40 @@ def _resolve_locale(lang_code: str) -> Tuple[str, Optional[str]]:
 
     # Unknown -> fallback to en_US
     return ("en_US", code)
+
+
+class DPDProvider(ProviderBase):
+    """Thin wrapper around module-level DPD functions with URL builder."""
+
+    provider = "dpd"
+
+    def language_to_locale(self, language: Optional[str]) -> str:
+        # Leverage existing resolver for consistency with API behavior
+        loc, _ = _resolve_locale((language or "EN").strip())
+        return loc
+
+    def build_tracking_url(
+        self, tracking_number: str, *, language: Optional[str] = None, **kwargs: Any
+    ) -> Optional[str]:
+        lang = (language or "EN").strip()
+        return build_tracking_url(tracking_number, language=lang)
+
+    def track(
+        self, tracking_number: str, *, language: str = "EN", **kwargs: Any
+    ) -> TrackingResponse:
+        return track(parcel_number=tracking_number, language=language)
+
+    async def track_async(
+        self,
+        tracking_number: str,
+        *,
+        language: str = "EN",
+        client: Optional[httpx.AsyncClient] = None,
+        **kwargs: Any,
+    ) -> TrackingResponse:
+        return await track_async(
+            parcel_number=tracking_number, language=language, client=client
+        )
 
 
 def _parse_iso_date(s: Optional[str]) -> Optional[datetime]:

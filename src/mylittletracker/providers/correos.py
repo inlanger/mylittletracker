@@ -7,9 +7,11 @@ The API supports multiple languages and returns detailed tracking events.
 import httpx
 from datetime import datetime
 from typing import Dict, Any, Optional
+from urllib.parse import quote
 
 from ..models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
 from ..utils import get_with_retries, async_get_with_retries
+from .base import ProviderBase
 
 # Correos Public API endpoint (no authentication required)
 BASE_URL = "https://api1.correos.es/digital-services/searchengines/api/v1/envios"
@@ -252,3 +254,46 @@ def _infer_correos_status(events: list[TrackingEvent]) -> ShipmentStatus:
         return ShipmentStatus.INFORMATION_RECEIVED
     else:
         return ShipmentStatus.UNKNOWN  # Default fallback for unmapped statuses
+
+
+def build_tracking_url(shipment_code: str, *, language: str = "ES") -> Optional[str]:
+    """Return a human-facing Correos tracking URL for this shipment.
+
+    Correos public locator pattern:
+    https://www.correos.es/es/es/herramientas/localizador/envios/detalle?tracking-number={shipment_code}
+    """
+    return f"https://www.correos.es/es/es/herramientas/localizador/envios/detalle?tracking-number={quote(shipment_code)}"
+
+
+class CorreosProvider(ProviderBase):
+    """Thin wrapper around module-level functions, preserving original docs.
+
+    Provides a class interface compatible with ProviderBase without changing
+    public module-level APIs or documentation.
+    """
+
+    provider = "correos"
+
+    def build_tracking_url(
+        self, tracking_number: str, *, language: Optional[str] = None, **kwargs: Any
+    ) -> Optional[str]:
+        return build_tracking_url(tracking_number, language=(language or "ES").upper())
+
+    def track(
+        self, tracking_number: str, *, language: str = "ES", **kwargs: Any
+    ) -> TrackingResponse:
+        return track(shipment_code=tracking_number, language=(language or "ES").upper())
+
+    async def track_async(
+        self,
+        tracking_number: str,
+        *,
+        language: str = "ES",
+        client: Optional[httpx.AsyncClient] = None,
+        **kwargs: Any,
+    ) -> TrackingResponse:
+        return await track_async(
+            shipment_code=tracking_number,
+            language=(language or "ES").upper(),
+            client=client,
+        )

@@ -3,9 +3,11 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import httpx
+from urllib.parse import quote
 
 from ..models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
 from ..utils import parse_dt_iso, get_with_retries, async_get_with_retries
+from .base import ProviderBase
 
 # Base URLs from the provided GLS OpenAPI spec
 SERVERS = {
@@ -249,3 +251,49 @@ def _map_gls_status(s: str) -> ShipmentStatus:
         "FINAL": ShipmentStatus.UNKNOWN,
     }
     return mapping.get(s, ShipmentStatus.UNKNOWN)
+
+
+def build_tracking_url(reference: str, *, language: str = "EN") -> Optional[str]:
+    """Return a human-facing GLS tracking URL for this shipment.
+
+    Best-effort global tracker link accepting a match query parameter.
+    """
+    return f"https://gls-group.com/track?match={quote(reference)}"
+
+
+class GLSProvider(ProviderBase):
+    """Thin wrapper around module-level GLS functions with URL builder."""
+
+    provider = "gls"
+
+    def build_tracking_url(
+        self, tracking_number: str, *, language: Optional[str] = None, **kwargs: Any
+    ) -> Optional[str]:
+        return build_tracking_url(tracking_number, language=(language or "EN").upper())
+
+    def track(
+        self, tracking_number: str, *, language: str = "EN", **kwargs: Any
+    ) -> TrackingResponse:
+        return track(
+            reference=tracking_number, language=(language or "EN").upper(), **kwargs
+        )
+
+    async def track_async(
+        self,
+        tracking_number: str,
+        *,
+        language: str = "EN",
+        server: Optional[str] = None,
+        show_links: bool = False,
+        show_events: bool = True,
+        client: Optional[httpx.AsyncClient] = None,
+        **kwargs: Any,
+    ) -> TrackingResponse:
+        return await track_async(
+            reference=tracking_number,
+            language=(language or "EN").upper(),
+            server=server,
+            show_links=show_links,
+            show_events=show_events,
+            client=client,
+        )

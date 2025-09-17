@@ -11,6 +11,7 @@ import os
 import httpx
 from datetime import datetime
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 from ..models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
 from ..utils import (
@@ -19,6 +20,7 @@ from ..utils import (
     async_get_with_retries,
     map_status_from_text,
 )
+from .base import ProviderBase
 
 # DHL Unified Tracking API endpoints
 # Test server for development/testing (requires test API key)
@@ -81,6 +83,44 @@ def _map_utapi_status_code(code: Optional[str]) -> ShipmentStatus:
     if c == "transit":
         return ShipmentStatus.IN_TRANSIT
     return ShipmentStatus.UNKNOWN
+
+
+def build_tracking_url(tracking_number: str, *, language: str = "en") -> Optional[str]:
+    """Return a human-facing DHL tracking URL for this shipment.
+
+    Global tracker pattern:
+    https://www.dhl.com/track?tracking-id={id}&language={lang2}
+    """
+    lang2 = (language or "en").strip().lower()[:2]
+    return f"https://www.dhl.com/track?tracking-id={quote(tracking_number)}&language={lang2}"
+
+
+class DHLProvider(ProviderBase):
+    """Thin wrapper around module-level DHL functions with URL builder."""
+
+    provider = "dhl"
+
+    def build_tracking_url(
+        self, tracking_number: str, *, language: Optional[str] = None, **kwargs: Any
+    ) -> Optional[str]:
+        return build_tracking_url(tracking_number, language=language or "en")
+
+    def track(
+        self, tracking_number: str, *, language: str = "en", **kwargs: Any
+    ) -> TrackingResponse:
+        return track(tracking_number, language=language, **kwargs)
+
+    async def track_async(
+        self,
+        tracking_number: str,
+        *,
+        language: str = "en",
+        client: Optional[httpx.AsyncClient] = None,
+        **kwargs: Any,
+    ) -> TrackingResponse:
+        return await track_async(
+            tracking_number, language=language, client=client, **kwargs
+        )
 
 
 def _looks_like_short_code(s: Optional[str]) -> bool:
