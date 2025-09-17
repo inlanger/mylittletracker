@@ -25,27 +25,39 @@ SUPPORTED_LANGUAGES = ["EN", "ES", "FR"]
 def track(shipment_code: str, language: str = "EN") -> TrackingResponse:
     """Fetch tracking info for a Correos shipment.
 
+    API URL Format: https://api1.correos.es/digital-services/searchengines/api/v1/envios (GET)
+
     API Requirements (discovered via testing):
+    - No authentication required
     - Required parameters:
       * text: The tracking number (required, cannot be empty)
       * language: Optional, defaults to "ES" if omitted
 
-    - Parameter behavior:
-      * Missing 'text': Returns 400 Bad Request with Spanish error message
-      * Empty 'text': Returns 400 "El valor código de envío introducido no es correcto: ''"
-      * Invalid tracking: Returns HTML error page (not JSON)
-      * Whitespace in tracking: Automatically trimmed by API
-      * Language support: EN, ES, FR work; DE and others return 500 error
+    Parameter behavior:
+    - Missing 'text': Returns 400 Bad Request with Spanish error message
+    - Empty 'text': Returns 400 "El valor código de envío introducido no es correcto: ''"
+    - Invalid tracking: Returns HTML error page (not JSON)
+    - Whitespace in tracking: Automatically trimmed by API
+    - Language support: EN, ES, FR work; DE and others return 500 error
 
-    - Headers:
-      * User-Agent: Optional, any value accepted
-      * Accept: Optional, but text/html returns HTML error pages
-      * No authentication headers required
+    Headers:
+    - User-Agent: Optional, any value accepted
+    - Accept: Optional, but text/html returns HTML error pages
+    - No authentication headers required
 
-    - Response format:
-      * Success: JSON with type, expedition, shipment[], and others fields
-      * Error: Either JSON error (400) or HTML page (invalid tracking)
-      * Timeout: Some invalid formats cause very long timeouts
+    Response format:
+    - Success: JSON with type, expedition, shipment[], and others fields
+    - Error: Either JSON error (400) or HTML page (invalid tracking)
+    - Timeout: Some invalid formats cause very long timeouts
+
+    Error handling:
+    - 400: Bad request with JSON error message
+    - 500: Server error for unsupported languages
+    - HTML response: Invalid tracking number format
+    - Timeout: Some malformed tracking numbers cause long delays
+
+    Server selection:
+    - Not applicable - single endpoint only
 
     Args:
         shipment_code: The tracking number to look up

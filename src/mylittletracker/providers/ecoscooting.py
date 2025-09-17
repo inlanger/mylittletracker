@@ -127,11 +127,46 @@ def _call_cainiao_api(tracking_number: str) -> Dict[str, Any]:
 
 
 def track(tracking_number: str, *, language: str = "en") -> TrackingResponse:
-    """
-    Fetch tracking info for an Ecoscooting shipment using httpx.
+    """Fetch tracking info for an Ecoscooting shipment.
+
+    API URL Format: https://de-link.cainiao.com/gateway/link.do (POST)
+
+    API Requirements (discovered via reverse engineering):
+    - All 5 parameters are REQUIRED for successful API calls
+    - No authentication required
+
+    Parameter behavior:
+    - logistics_interface: JSON with mailNo, locale, role (locale/role are flexible)
+    - msg_type: Must be exactly "CN_OVERSEA_LOGISTICS_INQUIRY_TRACKING"
+    - data_digest: Any string value works (acts as placeholder/signature field)
+    - logistic_provider_id: Must be exactly "DISTRIBUTOR_30250031" (Ecoscooting's ID)
+    - to_code: Must be exactly "CNL_EU" (Europe routing, other codes unauthorized)
+
+    Headers:
+    - Content-Type: application/x-www-form-urlencoded (required)
+    - User-Agent: Optional, any value accepted
+    - Accept: Optional, API always returns JSON
+    - Origin/Referer: Optional, can mimic browser request
+
+    Response format:
+    - Success: JSON with success="true" and shipment data
+    - Error without msg_type: XML response with errorCode S12
+    - Error without data_digest: XML response with errorCode S12
+    - Error with wrong to_code: JSON with success=false and errorCode S23
+    - Other errors: Mixed XML/JSON responses
+
+    Error handling:
+    - Missing msg_type: "request param api can not be null"
+    - Missing data_digest: "request param DataDigest can not be null"
+    - Missing logistic_provider_id: "request param fromCode can not be null"
+    - Wrong to_code: "toCode XX is not authorized"
+
+    Server selection:
+    - Not applicable - single endpoint only
 
     Args:
         tracking_number: The tracking number to look up
+        language: Not used (API always returns based on mailNo)
 
     Returns:
         TrackingResponse with normalized tracking data

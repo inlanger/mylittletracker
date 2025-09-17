@@ -47,21 +47,82 @@ _LANG_TO_LOCALE = {
 
 
 def track(parcel_number: str, *, language: str = "EN") -> TrackingResponse:
-    """Retrieve DPD tracking using the public PLC JSON endpoint only."""
+    """Retrieve DPD tracking using the public PLC JSON endpoint.
+
+    API URL Format: https://tracking.dpd.de/rest/plc/{locale}/{parcelNumber} (GET)
+
+    API Requirements (discovered via testing):
+    - No authentication required
+    - URL parameters:
+      * locale: Required, format must be language_COUNTRY (e.g., en_US)
+      * parcelNumber: Required, the tracking number
+
+    Parameter behavior:
+    - Locale: Must be in format lowercase_UPPERCASE (e.g., en_US, de_DE)
+    - Invalid case (EN_US, en_us) returns 500 or 429 errors
+    - Unsupported locales (xx_XX, en_GB, etc.) fallback to English
+    - Missing locale in URL causes 302 redirect
+    - Short forms (en, EN) cause 429 Too Many Requests errors
+    - Tracking number: Invalid format returns 302 redirect (not JSON)
+    - Non-existent but valid format returns empty scan events
+    - All zeros (00000000000000) returns valid JSON structure
+    - Missing tracking number causes 302 redirect
+
+    Headers:
+    - Accept: Optional, API always returns JSON regardless
+    - User-Agent: Optional, any value accepted
+    - No authentication headers required
+
+    Response format:
+    - Success: JSON with parcellifecycleResponse.parcelLifeCycleData
+    - Invalid tracking: 302 redirect (HTML page)
+    - Server errors: 500 for invalid locale case, 429 for rate limiting
+
+    Response structure:
+    - parcellifecycleResponse.parcelLifeCycleData contains:
+      * shipmentInfo: Parcel metadata
+      * statusInfo: Array of status milestones
+      * scanInfo.scan: Array of detailed scan events
+      * contactInfo: Contact information
+
+    Error handling:
+    - 302: Redirect for invalid tracking or missing parameters
+    - 429: Too Many Requests for rate limiting
+    - 500: Internal Server Error for invalid locale format
+    - Non-JSON response: Invalid tracking format
+
+    Server selection:
+    - Not applicable - single endpoint only
+
+    Args:
+        parcel_number: The DPD tracking number
+        language: Language code (2-letter) or locale (language_COUNTRY)
+
+    Returns:
+        TrackingResponse with normalized tracking data
+    """
     lang_code_raw = language or "EN"
     lang_code = lang_code_raw.strip()
     locale, normalized_from = _resolve_locale(lang_code)
 
+    # Headers (optional but recommended for clarity)
+    # The API returns JSON regardless of Accept header
     headers = {
-        "User-Agent": "mylittletracker/0.1 (+https://example.com)",
-        "Accept": "application/json",
+        "User-Agent": "mylittletracker/0.1 (+https://example.com)",  # Optional
+        "Accept": "application/json",  # Optional, API always returns JSON or redirects
     }
 
+    # Build API URL with locale and tracking number
     rest_url = f"{REST_BASE}/{locale}/{parcel_number}"
+
+    # Make API request
     resp = get_with_retries(rest_url, headers=headers, timeout=20.0)
+
+    # Check response type
+    # Invalid tracking numbers cause 302 redirects to HTML pages
     ctype = resp.headers.get("Content-Type", "")
     if "application/json" not in ctype.lower():
-        # Not a JSON response; treat as no data
+        # Not JSON = invalid tracking or redirect
         return TrackingResponse(shipments=[], provider="dpd")
 
     plc_data = resp.json()
@@ -96,7 +157,31 @@ def _normalize_dpd_plc_json(
     language_input: Optional[str] = None,
     normalized_from: Optional[str] = None,
 ) -> Shipment:
-    """Normalize JSON from /rest/plc/{locale}/{parcelLabelNumber} to our model."""
+    """Normalize JSON from /rest/plc/{locale}/{parcelLabelNumber} to our model.
+
+    PLC Response Structure:
+    - parcellifecycleResponse.parcelLifeCycleData contains:
+      * shipmentInfo: Metadata (parcelLabelNumber, productName, sortingCode, etc.)
+      * statusInfo: Array of status milestones with descriptions
+      * scanInfo.scan: Array of detailed scan events with timestamps
+      * contactInfo: Contact details (usually empty)
+
+    StatusInfo fields:
+    - status: Status code (ACCEPTED, ON_THE_ROAD, DELIVERED, etc.)
+    - label: Brief status label
+    - description.content: Array with detailed description text
+    - statusHasBeenReached: Boolean indicating if status was reached
+    - isCurrentStatus: Boolean for current status
+    - location: Location name
+    - depot: {businessUnit, number} depot information
+    - date: Date/time string in "DD.MM.YYYY, HH:MM" format
+
+    ScanInfo.scan fields:
+    - date: ISO timestamp (YYYY-MM-DDTHH:MM:SS)
+    - scanData.location: Scan location
+    - scanDescription.content: Array with scan description text
+    - scanType.name: Type of scan event
+    """
     plc = obj.get("parcellifecycleResponse", {}).get("parcelLifeCycleData", {})
     shipment_info = plc.get("shipmentInfo", {})
     status_info = plc.get("statusInfo", []) or []
@@ -269,14 +354,18 @@ async def track_async(
     language: str = "EN",
     client: Optional[httpx.AsyncClient] = None,
 ) -> TrackingResponse:
-    """Async version using the public PLC JSON endpoint only."""
+    """Async version using the public PLC JSON endpoint.
+
+    See track() for detailed API requirements and behavior.
+    """
     lang_code_raw = language or "EN"
     lang_code = lang_code_raw.strip()
     locale, normalized_from = _resolve_locale(lang_code)
 
+    # Headers (same as sync version)
     headers = {
-        "User-Agent": "mylittletracker/0.1 (+https://example.com)",
-        "Accept": "application/json",
+        "User-Agent": "mylittletracker/0.1 (+https://example.com)",  # Optional
+        "Accept": "application/json",  # Optional, API always returns JSON or redirects
     }
     rest_url = f"{REST_BASE}/{locale}/{parcel_number}"
 
@@ -304,8 +393,21 @@ async def track_async(
 def _resolve_locale(lang_code: str) -> Tuple[str, Optional[str]]:
     """Resolve an input language or locale to a supported PLC locale.
 
-    Returns (locale, normalized_from). normalized_from is the original input if a
-    normalization or fallback was applied; otherwise None.
+    The DPD API is strict about locale format:
+    - Must be exactly language_COUNTRY format (e.g., en_US)
+    - Case sensitive: lowercase language, UPPERCASE country
+    - Invalid formats cause 500 or 429 errors
+    - Unsupported but valid formats fallback to English
+
+    Resolution strategy:
+    1. Check if input is already a supported locale
+    2. Try to parse as language_COUNTRY and validate
+    3. Map 2-letter language codes to default locales
+    4. Fallback to en_US for anything unrecognized
+
+    Returns:
+        Tuple of (locale, normalized_from)
+        normalized_from is the original input if normalization occurred, else None
     """
     if not lang_code:
         return ("en_US", None)
@@ -348,7 +450,14 @@ def _parse_iso_date(s: Optional[str]) -> Optional[datetime]:
 
 
 def _parse_dpd_status_date(s: Optional[str]) -> Optional[datetime]:
-    # Example: "09.09.2025, 11:19"
+    """Parse DPD status date format.
+
+    DPD date format in statusInfo: "DD.MM.YYYY, HH:MM"
+    Example: "09.09.2025, 11:19"
+
+    Note: DPD timestamps don't include timezone information.
+    Times appear to be in local depot timezone.
+    """
     if not s:
         return None
     for fmt in ("%d.%m.%Y, %H:%M", "%d.%m.%Y %H:%M"):
