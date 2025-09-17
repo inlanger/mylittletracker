@@ -73,6 +73,40 @@ Add `--json` to print normalized JSON from the unified model:
 mylittletracker track correos PK43BG0440928440146007C --json
 ```
 
+### Language handling
+
+The CLI normalizes `--language` globally per provider so common inputs work consistently:
+
+- DPD (PLC JSON): expects a locale like `en_US`, `nl_NL`, `de_DE`, `fr_FR`, `it_IT`, `es_ES`.
+  - Inputs like `en`, `EN-us`, `en_us` are normalized to `en_US`.
+  - Unknown values fall back to `en_US`.
+  - The normalized locale is included in the JSON under `shipments[].extras.dpd_locale`.
+- GLS: uses two-letter, upper-case (e.g., `EN`, `ES`) in `Accept-Language`.
+  - Inputs like `en-us` normalize to `EN`.
+- DHL (UTAPI): uses two-letter, lower-case (e.g., `en`, `es`) for the `language` parameter.
+  - Inputs like `EN` normalize to `en`.
+- Correos/CTT: two-letter, upper-case (e.g., `EN`, `ES`).
+
+Notes:
+- When not using `--json`, the CLI prints a small note if your language input was normalized (e.g., `Note: normalized language 'EN-us' -> 'en_US' for dpd`).
+- Providers may also perform their own internal normalization as needed.
+
+Examples:
+
+```bash
+# DPD: accepts EN-us, normalizes to en_US
+mylittletracker track dpd 05162815323093 --language EN-us --json
+
+# GLS: accepts en-us, normalizes to EN
+mylittletracker track gls 92592437886 --language en-us --json
+
+# DHL: accepts EN, normalizes to en
+mylittletracker track dhl CH515858672DE --language EN --json
+
+# Correos: accepts en-us, normalizes to EN
+mylittletracker track correos PK43BG0440928440146007C --language en-us --json
+```
+
 ## Library usage (async)
 
 Use the async provider functions in your own code (bots/services). Reuse a single AsyncClient for multiple calls to reduce latency.
