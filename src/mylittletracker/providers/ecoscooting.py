@@ -14,6 +14,14 @@ from typing import List, Optional, Dict, Any
 from ..models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
 from ..utils import get_with_retries, async_get_with_retries
 
+# Ecoscooting/Cainiao API Constants (discovered via reverse engineering)
+CAINIAO_API_URL = "https://de-link.cainiao.com/gateway/link.do"
+ECOSCOOTING_MSG_TYPE = "CN_OVERSEA_LOGISTICS_INQUIRY_TRACKING"
+ECOSCOOTING_PROVIDER_ID = "DISTRIBUTOR_30250031"  # Fixed for Ecoscooting
+ECOSCOOTING_TO_CODE = "CNL_EU"  # Europe routing only
+DEFAULT_DATA_DIGEST = "suibianxie"  # Placeholder value (any string works)
+DEFAULT_LOCALE = "en_US"  # Default locale for API calls
+
 
 def _parse_ecoscooting_date(date_str: str) -> datetime:
     """Parse Ecoscooting date format: '2025-09-12 12:54:13 UTC+1'."""
@@ -56,24 +64,45 @@ def _map_ecoscooting_status(status_group: str) -> ShipmentStatus:
 
 
 def _call_cainiao_api(tracking_number: str) -> Dict[str, Any]:
-    """Call the Cainiao API directly to get tracking data."""
-    import json
+    """Call the Cainiao API directly to get tracking data.
 
-    url = "https://de-link.cainiao.com/gateway/link.do"
+    API Requirements (discovered via reverse engineering):
+    - All 5 parameters are REQUIRED for successful API calls
+    - logistics_interface: JSON with mailNo, locale, role (locale/role are flexible)
+    - msg_type: Must be exactly "CN_OVERSEA_LOGISTICS_INQUIRY_TRACKING"
+    - data_digest: Any string value works (acts as placeholder/signature field)
+    - logistic_provider_id: Must be exactly "DISTRIBUTOR_30250031" (Ecoscooting's ID)
+    - to_code: Must be exactly "CNL_EU" (Europe routing, other codes unauthorized)
 
-    # The exact parameters from the browser request
+    Error progression if parameters missing:
+    - Missing msg_type: "request param api can not be null"
+    - Missing data_digest: "request param DataDigest can not be null"
+    - Missing logistic_provider_id: "request param fromCode can not be null"
+    - Wrong to_code: "toCode XX is not authorized"
+
+    Args:
+        tracking_number: The tracking number to look up
+
+    Returns:
+        Dict containing API response with success, packageParam, statuses, etc.
+
+    Raises:
+        RuntimeError: If API returns non-200 status or other errors
+    """
+    # Build required API parameters using constants
     data = {
         "logistics_interface": json.dumps({
             "mailNo": tracking_number,
-            "locale": "en_US",
-            "role": "endUser"
+            "locale": DEFAULT_LOCALE,
+            "role": "endUser"  # Role is flexible (endUser, admin, etc. all work)
         }),
-        "msg_type": "CN_OVERSEA_LOGISTICS_INQUIRY_TRACKING",
-        "logistic_provider_id": "DISTRIBUTOR_30250031",
-        "data_digest": "suibianxie",  # This seems to be a placeholder value that works
-        "to_code": "CNL_EU"
+        "msg_type": ECOSCOOTING_MSG_TYPE,
+        "logistic_provider_id": ECOSCOOTING_PROVIDER_ID,
+        "data_digest": DEFAULT_DATA_DIGEST,
+        "to_code": ECOSCOOTING_TO_CODE
     }
 
+    # Headers to mimic browser request (not strictly required but recommended)
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
         "Origin": "https://ecoscooting.com",
@@ -85,7 +114,7 @@ def _call_cainiao_api(tracking_number: str) -> Dict[str, Any]:
 
     try:
         response = get_with_retries(
-            url,
+            CAINIAO_API_URL,
             method="POST",
             data=data,
             headers=headers
