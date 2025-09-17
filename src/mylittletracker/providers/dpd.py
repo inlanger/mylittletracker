@@ -2,12 +2,12 @@ from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
 import httpx
-from bs4 import BeautifulSoup
 
 from ..models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
+from ..utils import get_with_retries, async_get_with_retries
 
 
-BASE_PAGE = "https://www.dpdgroup.com/nl/mydpd/my-parcels/incoming"
+REST_BASE = "https://tracking.dpd.de/rest/plc"
 
 # Supported PLC locales and simple mapping from language -> locale
 _SUPPORTED_LOCALES = {
@@ -29,183 +29,39 @@ _LANG_TO_LOCALE = {
 
 
 def track(parcel_number: str, *, language: str = "EN") -> TrackingResponse:
-    """Attempt to retrieve DPD tracking by scraping the public page.
-
-    NOTE: This page is protected by anti-bot (e.g., Cloudflare). If we detect a
-    challenge page or cannot find embedded JSON, we'll return an empty
-    TrackingResponse and advise using an official API instead.
-    """
+    """Retrieve DPD tracking using the public PLC JSON endpoint only."""
     lang_code_raw = language or "EN"
     lang_code = lang_code_raw.strip()
-    url = f"{BASE_PAGE}?parcelNumber={parcel_number}&lang={lang_code.lower()}"
+    locale, normalized_from = _resolve_locale(lang_code)
+
     headers = {
         "User-Agent": "mylittletracker/0.1 (+https://example.com)",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept": "application/json",
     }
 
-    with httpx.Client(timeout=20.0, follow_redirects=True) as client:
-        # 1) Try calling the JSON REST endpoint as the SPA would
-        rest_base = "https://tracking.dpd.de/rest/plc"
-        # Resolve locale for PLC endpoint (e.g., en_US, nl_NL, de_DE)
-        locale, normalized_from = _resolve_locale(lang_code)
-        try:
-            json_headers = {
-                "User-Agent": headers["User-Agent"],
-                "Accept": "application/json",
-            }
-            rest_url = f"{rest_base}/{locale}/{parcel_number}"
-            rest_resp = client.get(rest_url, headers=json_headers)
-            ctype = rest_resp.headers.get("Content-Type", "")
-            if rest_resp.status_code == 200 and "application/json" in ctype.lower():
-                plc_data = rest_resp.json()
-                # Normalize JSON payload (PLC structure)
-                try:
-                    shipment = _normalize_dpd_plc_json(
-                        plc_data,
-                        parcel_number,
-                        locale=locale,
-                        language_input=lang_code,
-                        normalized_from=normalized_from,
-                    )
-                    return TrackingResponse(shipments=[shipment], provider="dpd")
-                except Exception:
-                    # Fallback to generic embedded normalizer
-                    try:
-                        shipment = _normalize_dpd_embedded(plc_data, parcel_number)
-                        return TrackingResponse(shipments=[shipment], provider="dpd")
-                    except Exception:
-                        pass
-        except Exception:
-            # ignore and fallback to HTML scraping
-            pass
+    rest_url = f"{REST_BASE}/{locale}/{parcel_number}"
+    resp = get_with_retries(rest_url, headers=headers, timeout=20.0)
+    ctype = resp.headers.get("Content-Type", "")
+    if "application/json" not in ctype.lower():
+        # Not a JSON response; treat as no data
+        return TrackingResponse(shipments=[], provider="dpd")
 
-        # 2) Fallback to HTML page scraping
-        resp = client.get(url, headers=headers)
-        html = resp.text or ""
-
-    # Detect Cloudflare/anti-bot interstitial
-    if "Just a moment" in html or "challenge-platform" in html:
-        # Return an empty normalized payload, but with a helpful message via status.
-        shipment = Shipment(
-            tracking_number=parcel_number,
-            carrier="dpd",
-            status=ShipmentStatus.UNKNOWN,
-            events=[
-                TrackingEvent(
-                    timestamp=datetime.now(),
-                    status="Anti-bot protection encountered. Unable to scrape page.",
-                    location=None,
-                    details=(
-                        "DPD public page is protected. Consider using an official DPD API "
-                        "(with key) or a trusted proxy."
-                    ),
-                    status_code=None,
-                    extras=None,
-                )
-            ],
-            service_type=None,
-            origin=None,
-            destination=None,
-            estimated_delivery=None,
-            actual_delivery=None,
-            extras=None,
+    plc_data = resp.json()
+    try:
+        shipment = _normalize_dpd_plc_json(
+            plc_data,
+            parcel_number,
+            locale=locale,
+            language_input=lang_code,
+            normalized_from=normalized_from,
         )
         return TrackingResponse(shipments=[shipment], provider="dpd")
-
-    # Try to extract embedded JSON from script tags
-    soup = BeautifulSoup(html, "html.parser")
-
-    # Heuristics: look for JSON in <script type="application/json"> blocks
-    json_candidates: list[str] = []
-    for script in soup.find_all("script"):
-        t = script.get("type")
-        if t and "json" in t.lower():
-            content = script.string or script.text or ""
-            if content and "parcel" in content.lower():
-                json_candidates.append(content)
-        else:
-            # Fallback: inline scripts that assign to window.__* style variables
-            content = script.string or script.text or ""
-            if content and (
-                "__APOLLO_STATE__" in content
-                or "__NUXT__" in content
-                or "__NEXT_DATA__" in content
-            ):
-                json_candidates.append(content)
-
-    data: Optional[Dict[str, Any]] = None
-    for raw in json_candidates:
-        # Try to locate a JSON object within the string
-        obj = _extract_first_json_object(raw)
-        if obj and isinstance(obj, dict):
-            # Heuristic: look for keys that suggest parcel tracking
-            if _looks_like_dpd_payload(obj):
-                data = obj
-                break
-
-    if not data:
-        # As a last resort, try to find any JSON snippet containing parcelNumber
-        for raw in json_candidates:
-            obj = _extract_first_json_object(raw)
-            if obj and parcel_number in raw:
-                data = obj
-                break
-
-    # Convert to normalized model if we found something meaningful
-    if data:
+    except Exception:
         try:
-            shipment = _normalize_dpd_embedded(data, parcel_number)
+            shipment = _normalize_dpd_embedded(plc_data, parcel_number)
             return TrackingResponse(shipments=[shipment], provider="dpd")
         except Exception:
-            pass
-
-    # Fallback: no usable data found
-    shipment = Shipment(
-        tracking_number=parcel_number,
-        carrier="dpd",
-        status=ShipmentStatus.UNKNOWN,
-        events=[
-            TrackingEvent(
-                timestamp=datetime.now(),
-                status="No embedded tracking data found",
-                location=None,
-                details=(
-                    "The public page may be a JS SPA or protected. Consider using an "
-                    "official DPD API or provide a custom endpoint."
-                ),
-                status_code=None,
-                extras=None,
-            )
-        ],
-        service_type=None,
-        origin=None,
-        destination=None,
-        estimated_delivery=None,
-        actual_delivery=None,
-        extras=None,
-    )
-    return TrackingResponse(shipments=[shipment], provider="dpd")
-
-
-def _extract_first_json_object(s: str) -> Optional[Dict[str, Any]]:
-    """Extract and parse the first JSON object-like substring from s.
-
-    This is a heuristic: it scans for the first '{' and attempts to parse up to
-    a matching '}'. We keep it conservative to avoid heavy deps.
-    """
-    import json
-
-    start = s.find("{")
-    if start == -1:
-        return None
-    # Try progressively shorter tails to find a valid JSON
-    for end in range(len(s), start + 1, -1):
-        chunk = s[start:end]
-        try:
-            return json.loads(chunk)
-        except Exception:
-            continue
-    return None
+            return TrackingResponse(shipments=[], provider="dpd")
 
 
 def _looks_like_dpd_payload(obj: Dict[str, Any]) -> bool:
@@ -395,57 +251,36 @@ async def track_async(
     language: str = "EN",
     client: Optional[httpx.AsyncClient] = None,
 ) -> TrackingResponse:
-    """Async version of DPD tracking (PLC JSON first, fallback to HTML)."""
+    """Async version using the public PLC JSON endpoint only."""
     lang_code_raw = language or "EN"
     lang_code = lang_code_raw.strip()
-    headers = {
-        "User-Agent": "mylittletracker/0.1 (+https://example.com)",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    }
-    rest_base = "https://tracking.dpd.de/rest/plc"
     locale, normalized_from = _resolve_locale(lang_code)
 
-    async def _request_plc(ac: httpx.AsyncClient) -> Optional[TrackingResponse]:
-        try:
-            resp = await ac.get(
-                f"{rest_base}/{locale}/{parcel_number}",
-                headers={
-                    "User-Agent": headers["User-Agent"],
-                    "Accept": "application/json",
-                },
-                timeout=20.0,
-            )
-            ctype = resp.headers.get("Content-Type", "")
-            if resp.status_code == 200 and "application/json" in ctype.lower():
-                data = resp.json()
-                try:
-                    shipment = _normalize_dpd_plc_json(
-                        data,
-                        parcel_number,
-                        locale=locale,
-                        language_input=lang_code,
-                        normalized_from=normalized_from,
-                    )
-                except Exception:
-                    shipment = _normalize_dpd_embedded(data, parcel_number)
-                return TrackingResponse(shipments=[shipment], provider="dpd")
-        except Exception:
-            return None
-        return None
+    headers = {
+        "User-Agent": "mylittletracker/0.1 (+https://example.com)",
+        "Accept": "application/json",
+    }
+    rest_url = f"{REST_BASE}/{locale}/{parcel_number}"
 
-    if client is None:
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as ac:
-            plc = await _request_plc(ac)
-            if plc is not None:
-                return plc
-            # Fallback to HTML scrape path
-            return track(parcel_number, language=language)
-    else:
-        plc = await _request_plc(client)
-        if plc is not None:
-            return plc
-        # Fallback to sync HTML scrape as the last resort
-        return track(parcel_number, language=language)
+    resp = await async_get_with_retries(
+        rest_url, headers=headers, timeout=20.0, client=client
+    )
+    ctype = resp.headers.get("Content-Type", "")
+    if "application/json" not in ctype.lower():
+        return TrackingResponse(shipments=[], provider="dpd")
+
+    data = resp.json()
+    try:
+        shipment = _normalize_dpd_plc_json(
+            data,
+            parcel_number,
+            locale=locale,
+            language_input=lang_code,
+            normalized_from=normalized_from,
+        )
+    except Exception:
+        shipment = _normalize_dpd_embedded(data, parcel_number)
+    return TrackingResponse(shipments=[shipment], provider="dpd")
 
 
 def _resolve_locale(lang_code: str) -> Tuple[str, Optional[str]]:
