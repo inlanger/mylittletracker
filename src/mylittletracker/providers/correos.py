@@ -1,3 +1,9 @@
+"""Correos (Spanish postal service) tracking provider.
+
+Correos provides a public API for tracking shipments without authentication.
+The API supports multiple languages and returns detailed tracking events.
+"""
+
 import httpx
 from datetime import datetime
 from typing import Dict, Any, Optional
@@ -5,18 +11,60 @@ from typing import Dict, Any, Optional
 from ..models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
 from ..utils import get_with_retries, async_get_with_retries
 
+# Correos Public API endpoint (no authentication required)
 BASE_URL = "https://api1.correos.es/digital-services/searchengines/api/v1/envios"
+
+# Supported languages (discovered via testing)
+# - EN: English
+# - ES: Spanish (default if language param omitted)
+# - FR: French
+# Other language codes (DE, IT, etc.) return HTTP 500 errors
+SUPPORTED_LANGUAGES = ["EN", "ES", "FR"]
 
 
 def track(shipment_code: str, language: str = "EN") -> TrackingResponse:
     """Fetch tracking info for a Correos shipment.
 
-    Returns normalized tracking data as a TrackingResponse model.
+    API Requirements (discovered via testing):
+    - Required parameters:
+      * text: The tracking number (required, cannot be empty)
+      * language: Optional, defaults to "ES" if omitted
+
+    - Parameter behavior:
+      * Missing 'text': Returns 400 Bad Request with Spanish error message
+      * Empty 'text': Returns 400 "El valor código de envío introducido no es correcto: ''"
+      * Invalid tracking: Returns HTML error page (not JSON)
+      * Whitespace in tracking: Automatically trimmed by API
+      * Language support: EN, ES, FR work; DE and others return 500 error
+
+    - Headers:
+      * User-Agent: Optional, any value accepted
+      * Accept: Optional, but text/html returns HTML error pages
+      * No authentication headers required
+
+    - Response format:
+      * Success: JSON with type, expedition, shipment[], and others fields
+      * Error: Either JSON error (400) or HTML page (invalid tracking)
+      * Timeout: Some invalid formats cause very long timeouts
+
+    Args:
+        shipment_code: The tracking number to look up
+        language: Language code (EN, ES, or FR recommended)
+
+    Returns:
+        TrackingResponse with normalized tracking data
     """
-    params = {"text": shipment_code, "language": language}
+    # Build request parameters
+    params = {
+        "text": shipment_code,  # Required: tracking number
+        "language": language,  # Optional: defaults to ES if omitted
+    }
+
+    # Headers to ensure JSON response (not strictly required but recommended)
+    # Without Accept: application/json, invalid tracking returns HTML errors
     headers = {
-        "User-Agent": "mylittletracker/0.1 (+https://example.com)",
-        "Accept": "application/json",
+        "User-Agent": "mylittletracker/0.1 (+https://example.com)",  # Optional
+        "Accept": "application/json",  # Recommended to avoid HTML error pages
     }
 
     response = get_with_retries(BASE_URL, params=params, headers=headers, timeout=20.0)
@@ -31,11 +79,20 @@ async def track_async(
     *,
     client: Optional[httpx.AsyncClient] = None,
 ) -> TrackingResponse:
-    """Async version of Correos tracking."""
-    params = {"text": shipment_code, "language": language}
+    """Async version of Correos tracking.
+
+    See track() for detailed API requirements and behavior.
+    """
+    # Build request parameters (same as sync version)
+    params = {
+        "text": shipment_code,  # Required: tracking number
+        "language": language,  # Optional: defaults to ES if omitted
+    }
+
+    # Headers to ensure JSON response
     headers = {
-        "User-Agent": "mylittletracker/0.1 (+https://example.com)",
-        "Accept": "application/json",
+        "User-Agent": "mylittletracker/0.1 (+https://example.com)",  # Optional
+        "Accept": "application/json",  # Recommended to avoid HTML error pages
     }
     if client is None:
         resp = await async_get_with_retries(
@@ -52,7 +109,32 @@ async def track_async(
 def normalize_correos_response(
     raw_data: Dict[str, Any], tracking_number: str
 ) -> TrackingResponse:
-    """Normalize Correos API response to universal TrackingResponse model."""
+    """Normalize Correos API response to universal TrackingResponse model.
+
+    API Response Structure:
+    - type: "envio" for shipments
+    - expedition: Usually None for single shipments
+    - shipment: Array of shipment objects
+    - others: Contains offices[], mailboxes[], citypaqs[] arrays
+
+    Shipment Object Fields:
+    - shipmentCode: The tracking number
+    - events: Array of tracking events
+    - associatedShipments: Related tracking numbers
+    - pendingCustomsPay, stateCode, date_delivery_sum: Additional status info
+    - error: {errorCode, errorDesc} for shipment-level errors
+    - customs: Customs-related information
+    - modify: Modification options
+
+    Event Object Fields:
+    - eventDate: Date in DD/MM/YYYY format
+    - eventTime: Time in HH:MM:SS format
+    - phase: Numeric phase (1=initial, higher=later stages)
+    - colour: Status color code (V=green, etc.)
+    - summaryText: Brief status description (language-dependent)
+    - extendedText: Detailed status description
+    - codired: Location/office code (when available)
+    """
     shipments: list[Shipment] = []
 
     # Extract shipment data from Correos format
@@ -108,7 +190,14 @@ def normalize_correos_response(
 
 
 def _parse_correos_datetime(date_str: str, time_str: str) -> datetime:
-    """Parse Correos date and time strings into datetime object."""
+    """Parse Correos date and time strings into datetime object.
+
+    Correos date format: DD/MM/YYYY (e.g., "08/09/2025")
+    Correos time format: HH:MM:SS (e.g., "11:48:03")
+
+    Note: Correos timestamps don't include timezone information,
+    so we assume local Spanish time (would need pytz for proper handling).
+    """
     try:
         # Assume format like "DD/MM/YYYY" and "HH:MM"
         if date_str and time_str:
@@ -124,7 +213,17 @@ def _parse_correos_datetime(date_str: str, time_str: str) -> datetime:
 
 
 def _infer_correos_status(events: list[TrackingEvent]) -> ShipmentStatus:
-    """Infer shipment status from Correos events."""
+    """Infer shipment status from Correos events.
+
+    Status mapping based on summaryText keywords:
+    - "entregado"/"delivered": Package delivered
+    - "reparto"/"delivery": Out for delivery
+    - "transito"/"transit": In transit
+    - "admitido"/"received"/"information": Initial information received
+
+    Note: Status text varies by language parameter, so we check
+    for both Spanish and English keywords.
+    """
     if not events:
         return ShipmentStatus.UNKNOWN
 

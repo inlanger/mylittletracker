@@ -1,3 +1,9 @@
+"""DPD tracking provider using the public PLC (Parcel Life Cycle) API.
+
+DPD provides a REST API for tracking parcels without authentication.
+The API supports multiple locales and returns detailed tracking events.
+"""
+
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
@@ -7,24 +13,36 @@ from ..models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
 from ..utils import get_with_retries, async_get_with_retries
 
 
+# DPD Public PLC (Parcel Life Cycle) API endpoint
+# No authentication required - public tracking endpoint
 REST_BASE = "https://tracking.dpd.de/rest/plc"
 
-# Supported PLC locales and simple mapping from language -> locale
+# Supported PLC locales (discovered via testing)
+# The API accepts locale codes in format: language_COUNTRY
+# Invalid/unsupported locales fallback to English (en_US)
+# Note: Locale codes are case-sensitive (must be lowercase_UPPERCASE)
 _SUPPORTED_LOCALES = {
-    "en_US",
-    "nl_NL",
-    "de_DE",
-    "fr_FR",
-    "it_IT",
-    "es_ES",
+    "en_US",  # English (fallback for invalid locales)
+    "de_DE",  # German
+    "fr_FR",  # French
+    "es_ES",  # Spanish
+    "it_IT",  # Italian (returns English content)
+    "nl_NL",  # Dutch
+    "pl_PL",  # Polish
+    "cs_CZ",  # Czech
 }
+
+# Simple language code to locale mapping
+# Used when user provides 2-letter language codes
 _LANG_TO_LOCALE = {
     "en": "en_US",
-    "nl": "nl_NL",
     "de": "de_DE",
     "fr": "fr_FR",
-    "it": "it_IT",
     "es": "es_ES",
+    "it": "it_IT",
+    "nl": "nl_NL",
+    "pl": "pl_PL",
+    "cs": "cs_CZ",
 }
 
 
