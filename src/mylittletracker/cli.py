@@ -32,7 +32,9 @@ def cmd_track(args: argparse.Namespace) -> int:
             error_occurred = True
     # If language normalization happened and not JSON output, emit a small note when verbose
     if args.verbose and (not args.json) and lang_from and (lang_from != lang_norm):
-        print(f"Note: normalized language '{lang_from}' -> '{lang_norm}' for {args.carrier}")
+        print(
+            f"Note: normalized language '{lang_from}' -> '{lang_norm}' for {args.carrier}"
+        )
     if args.json:
         # Convert Pydantic model to JSON (compat across Pydantic v1/v2)
         try:
@@ -231,7 +233,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Propagate errors (non-zero exit) instead of returning fallback",
     )
     p_track.add_argument(
-        "--verbose", "-v", action="store_true", help="Print normalization notes and extra info"
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Print normalization notes and extra info",
     )
     p_track.set_defaults(func=cmd_track)
 

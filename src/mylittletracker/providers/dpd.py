@@ -38,7 +38,7 @@ def track(
     TrackingResponse and advise using an official API instead.
     """
     # prefer 'language' but allow legacy 'lang'
-    lang_code_raw = (lang or language or "EN")
+    lang_code_raw = lang or language or "EN"
     lang_code = lang_code_raw.strip()
     url = f"{BASE_PAGE}?parcelNumber={parcel_number}&lang={lang_code.lower()}"
     headers = {
@@ -306,18 +306,24 @@ def _normalize_dpd_plc_json(
     if locale:
         extras["dpd_locale"] = locale
     # Record normalization if the input language was not directly a supported locale
-    if normalized_from and normalized_from != "":
-        # Only set if normalization actually happened
-        if isinstance(language_input, str):
-            canon = language_input.strip()
-            if canon.lower() != locale.lower():
+    if normalized_from and isinstance(language_input, str) and locale:
+        canon = language_input.strip()
+        try:
+            if canon and canon.lower() != locale.lower():
                 extras["language_normalized_from"] = canon
+        except Exception:
+            pass
 
     return Shipment(
         tracking_number=tracking_number,
         carrier="dpd",
         status=status_enum,
         events=events,
+        service_type=None,
+        origin=None,
+        destination=None,
+        estimated_delivery=None,
+        actual_delivery=None,
         extras=extras or None,
     )
 
@@ -394,7 +400,7 @@ async def track_async(
     client: Optional[httpx.AsyncClient] = None,
 ) -> TrackingResponse:
     """Async version of DPD tracking (PLC JSON first, fallback to HTML)."""
-    lang_code_raw = (lang or language or "EN")
+    lang_code_raw = lang or language or "EN"
     lang_code = lang_code_raw.strip()
     headers = {
         "User-Agent": "mylittletracker/0.1 (+https://example.com)",
@@ -418,7 +424,11 @@ async def track_async(
                 data = resp.json()
                 try:
                     shipment = _normalize_dpd_plc_json(
-                        data, parcel_number, locale=locale, language_input=lang_code, normalized_from=normalized_from
+                        data,
+                        parcel_number,
+                        locale=locale,
+                        language_input=lang_code,
+                        normalized_from=normalized_from,
                     )
                 except Exception:
                     shipment = _normalize_dpd_embedded(data, parcel_number)

@@ -4,7 +4,12 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from ..models import TrackingResponse, Shipment, TrackingEvent, ShipmentStatus
-from ..utils import parse_dt_iso, get_with_retries, async_get_with_retries, map_status_from_text
+from ..utils import (
+    parse_dt_iso,
+    get_with_retries,
+    async_get_with_retries,
+    map_status_from_text,
+)
 
 TEST_BASE = "https://api-test.dhl.com/track/shipments"
 PROD_BASE = "https://api-eu.dhl.com/track/shipments"
@@ -31,7 +36,8 @@ def _map_utapi_status_code(code: Optional[str]) -> ShipmentStatus:
 
 
 def _looks_like_short_code(s: Optional[str]) -> bool:
-    return bool(s) and len(s) <= 3 and s.isupper()
+    v = s or ""
+    return bool(s) and len(v) <= 3 and v.isupper()
 
 
 def _select_event_text(e: Dict[str, Any]) -> tuple[str, Optional[str]]:
@@ -229,30 +235,17 @@ def normalize_dhl_response(
     origin = None
     destination = None
     if "origin" in details:
-        origin_addr = (details["origin"].get("address") or {})
-        origin_locality = origin_addr.get('addressLocality', '')
-        origin_country = origin_addr.get('countryCode', '')
+        origin_addr = details["origin"].get("address") or {}
+        origin_locality = origin_addr.get("addressLocality", "")
+        origin_country = origin_addr.get("countryCode", "")
         origin = f"{origin_locality}, {origin_country}".strip(", ")
 
     if "destination" in details:
-        dest_addr = (details["destination"].get("address") or {})
-        dest_locality = dest_addr.get('addressLocality', '')
-        dest_country = dest_addr.get('countryCode', '')
+        dest_addr = details["destination"].get("address") or {}
+        dest_locality = dest_addr.get("addressLocality", "")
+        dest_country = dest_addr.get("countryCode", "")
         destination = f"{dest_locality}, {dest_country}".strip(", ")
-    
-=======
-        origin_addr = details["origin"].get("address", {})
-        origin = f"{origin_addr.get('addressLocality', '')}, {origin_addr.get('countryCode', '')}".strip(
-            ", "
-        )
 
-    if "destination" in details:
-        dest_addr = details["destination"].get("address", {})
-        destination = f"{dest_addr.get('addressLocality', '')}, {dest_addr.get('countryCode', '')}".strip(
-            ", "
-        )
-
->>>>>>> caf8804 (chore: WIP before integrating upstream main)
     shipment = Shipment(
         tracking_number=dhl_shipment.get("id", tracking_number),
         carrier="dhl",
@@ -276,18 +269,27 @@ def _parse_dhl_timestamp(timestamp_str: str) -> datetime:
     return parse_dt_iso(timestamp_str) or datetime.now()
 
 
-<<<<<<< HEAD
-def _infer_dhl_status(dhl_shipment: Dict[str, Any], events: list[TrackingEvent]) -> ShipmentStatus:
+def _infer_dhl_status(
+    dhl_shipment: Dict[str, Any], events: list[TrackingEvent]
+) -> ShipmentStatus:
     """Infer shipment status from DHL shipment data and events per UTAPI spec."""
     # 1) Shipment-level statusCode is canonical
-    shipment_status_obj = (dhl_shipment.get("status") or {})
+    shipment_status_obj = dhl_shipment.get("status") or {}
     st_code = (shipment_status_obj.get("statusCode") or "").strip()
     mapped = _map_utapi_status_code(st_code)
     if mapped != ShipmentStatus.UNKNOWN:
         # If mapped to IN_TRANSIT but latest event text clearly indicates out-for-delivery
         if mapped == ShipmentStatus.IN_TRANSIT and events:
             latest_text = (events[-1].details or events[-1].status or "").lower()
-            if any(phrase in latest_text for phrase in ["out for delivery", "in delivery", "loaded onto the delivery vehicle", "delivery vehicle"]):
+            if any(
+                phrase in latest_text
+                for phrase in [
+                    "out for delivery",
+                    "in delivery",
+                    "loaded onto the delivery vehicle",
+                    "delivery vehicle",
+                ]
+            ):
                 return ShipmentStatus.OUT_FOR_DELIVERY
         return mapped
 
@@ -299,44 +301,22 @@ def _infer_dhl_status(dhl_shipment: Dict[str, Any], events: list[TrackingEvent])
             if mapped != ShipmentStatus.UNKNOWN:
                 if mapped == ShipmentStatus.IN_TRANSIT:
                     text = (latest.details or latest.status or "").lower()
-                    if any(phrase in text for phrase in ["out for delivery", "in delivery", "loaded onto the delivery vehicle", "delivery vehicle"]):
+                    if any(
+                        phrase in text
+                        for phrase in [
+                            "out for delivery",
+                            "in delivery",
+                            "loaded onto the delivery vehicle",
+                            "delivery vehicle",
+                        ]
+                    ):
                         return ShipmentStatus.OUT_FOR_DELIVERY
                 return mapped
 
         # 3) Heuristic based on human-readable text
-        text = (latest.details or latest.status or "")
+        text = latest.details or latest.status or ""
         mapped = map_status_from_text(text)
         if mapped != ShipmentStatus.UNKNOWN:
             return mapped
-
-    return ShipmentStatus.UNKNOWN
-=======
-def _infer_dhl_status(
-    dhl_shipment: Dict[str, Any], events: list[TrackingEvent]
-) -> ShipmentStatus:
-    """Infer shipment status from DHL shipment data and events."""
-    # Check shipment status first
-    shipment_status = dhl_shipment.get("status", {}).get("status", "").lower()
-
-    if "delivered" in shipment_status:
-        return ShipmentStatus.DELIVERED
-    elif "transit" in shipment_status:
-        return ShipmentStatus.IN_TRANSIT
-    elif "exception" in shipment_status:
-        return ShipmentStatus.EXCEPTION
-
-    # Check latest event if shipment status is not clear
-    if events:
-        latest_status = events[-1].status.lower()
-
-        if "delivered" in latest_status:
-            return ShipmentStatus.DELIVERED
-        elif "out for delivery" in latest_status or "delivery" in latest_status:
-            return ShipmentStatus.OUT_FOR_DELIVERY
-        elif "transit" in latest_status or "departed" in latest_status:
-            return ShipmentStatus.IN_TRANSIT
-        elif "received" in latest_status or "processed" in latest_status:
-            return ShipmentStatus.INFORMATION_RECEIVED
->>>>>>> caf8804 (chore: WIP before integrating upstream main)
 
     return ShipmentStatus.UNKNOWN
