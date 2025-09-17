@@ -126,7 +126,7 @@ def _call_cainiao_api(tracking_number: str) -> Dict[str, Any]:
         raise RuntimeError(f"Failed to call Cainiao API: {e}")
 
 
-def track(tracking_number: str) -> TrackingResponse:
+def track(tracking_number: str, *, language: str = "en") -> TrackingResponse:
     """
     Fetch tracking info for an Ecoscooting shipment using httpx.
 
