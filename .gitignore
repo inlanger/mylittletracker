@@ -39,3 +39,6 @@ htmlcov/
 # MacOS
 .DS_Store
 
+# Local testing data
+/test_codes.json
+
